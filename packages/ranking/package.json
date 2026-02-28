@@ -1,0 +1,39 @@
+{
+  "name": "@forge/ranking",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./retrieval-service": {
+      "types": "./src/retrieval-service.ts",
+      "default": "./dist/retrieval-service.js"
+    },
+    "./retrieval-sync": {
+      "types": "./src/retrieval-sync.ts",
+      "default": "./dist/retrieval-sync.js"
+    },
+    "./postgres-bm25-retriever": {
+      "types": "./src/postgres-bm25-retriever.ts",
+      "default": "./dist/postgres-bm25-retriever.js"
+    },
+    "./qdrant-semantic-retriever": {
+      "types": "./src/qdrant-semantic-retriever.ts",
+      "default": "./dist/qdrant-semantic-retriever.js"
+    },
+    "./embedding-provider": {
+      "types": "./src/embedding-provider.ts",
+      "default": "./dist/embedding-provider.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run tests"
+  }
+}

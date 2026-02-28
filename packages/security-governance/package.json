@@ -1,0 +1,39 @@
+{
+  "name": "@forge/security-governance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./http-handler": {
+      "types": "./src/http-handler.ts",
+      "default": "./dist/http-handler.js"
+    },
+    "./postgres-adapters": {
+      "types": "./src/postgres-adapters.ts",
+      "default": "./dist/postgres-adapters.js"
+    },
+    "./postgres-job-store": {
+      "types": "./src/postgres-job-store.ts",
+      "default": "./dist/postgres-job-store.js"
+    },
+    "./postgres-reporter-score-adapters": {
+      "types": "./src/postgres-reporter-score-adapters.ts",
+      "default": "./dist/postgres-reporter-score-adapters.js"
+    },
+    "./dead-letter-requeue": {
+      "types": "./src/dead-letter-requeue.ts",
+      "default": "./dist/dead-letter-requeue.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run tests"
+  }
+}

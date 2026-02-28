@@ -1,0 +1,435 @@
+import type {
+  CatalogAliasCandidate,
+  CatalogConflictCandidate,
+  CatalogFieldLineageCandidate,
+  CatalogIngestResult,
+  CatalogPackageCandidate
+} from './index.js';
+
+export interface PostgresQueryResult<Row> {
+  rows: Row[];
+  rowCount: number | null;
+}
+
+export interface PostgresQueryExecutor {
+  query<Row = Record<string, unknown>>(
+    sql: string,
+    params?: readonly unknown[]
+  ): Promise<PostgresQueryResult<Row>>;
+}
+
+export interface PostgresTransactionalQueryExecutor extends PostgresQueryExecutor {
+  withTransaction?<T>(callback: (tx: PostgresQueryExecutor) => Promise<T>): Promise<T>;
+}
+
+export interface CatalogIngestPersistenceResult {
+  merge_run_id: string;
+  package_id: string | null;
+  queued_conflicts: number;
+}
+
+export interface CatalogPackageListItem {
+  package_id: string;
+  package_slug: string | null;
+  canonical_repo: string | null;
+  updated_at: string;
+}
+
+export interface CatalogPackageAliasRecord {
+  alias_type: string;
+  alias_value: string;
+  source_name: string;
+  active: boolean;
+}
+
+export interface CatalogPackageLineageSummaryRecord {
+  field_name: string;
+  field_source: string;
+  field_source_updated_at: string | null;
+  merge_run_id: string;
+}
+
+export interface CatalogPackageDetail extends CatalogPackageListItem {
+  aliases: CatalogPackageAliasRecord[];
+  lineage_summary: CatalogPackageLineageSummaryRecord[];
+}
+
+export interface CatalogPostgresAdapters {
+  persistIngestResult(result: CatalogIngestResult): Promise<CatalogIngestPersistenceResult>;
+  listPackages(limit: number, offset: number): Promise<CatalogPackageListItem[]>;
+  getPackage(packageId: string): Promise<CatalogPackageDetail | null>;
+  searchPackages(query: string, limit: number): Promise<CatalogPackageListItem[]>;
+}
+
+export interface CatalogPostgresAdapterOptions {
+  db: PostgresTransactionalQueryExecutor;
+}
+
+async function runInTransaction<T>(
+  db: PostgresTransactionalQueryExecutor,
+  callback: (tx: PostgresQueryExecutor) => Promise<T>
+): Promise<T> {
+  if (db.withTransaction) {
+    return db.withTransaction(callback);
+  }
+
+  await db.query('BEGIN');
+  try {
+    const result = await callback(db);
+    await db.query('COMMIT');
+    return result;
+  } catch (error) {
+    await db.query('ROLLBACK');
+    throw error;
+  }
+}
+
+function normalizeSearchQuery(query: string): string {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+  return `%${trimmed.replace(/[%_]/g, '')}%`;
+}
+
+async function upsertPackageMergeRun(
+  tx: PostgresQueryExecutor,
+  result: CatalogIngestResult
+): Promise<void> {
+  await tx.query(
+    `
+      INSERT INTO package_merge_runs (
+        merge_run_id,
+        source_snapshot,
+        created_at
+      )
+      VALUES ($1, $2::jsonb, $3::timestamptz)
+      ON CONFLICT (merge_run_id) DO UPDATE
+      SET
+        source_snapshot = EXCLUDED.source_snapshot
+    `,
+    [result.merge_run_id, JSON.stringify(result.source_snapshot), result.occurred_at]
+  );
+}
+
+async function upsertIdentityConflict(
+  tx: PostgresQueryExecutor,
+  conflict: CatalogConflictCandidate,
+  occurredAt: string
+): Promise<void> {
+  await tx.query(
+    `
+      INSERT INTO package_identity_conflicts (
+        conflict_fingerprint,
+        canonical_locator_candidate,
+        conflicting_aliases,
+        detected_by,
+        status,
+        review_sla_hours,
+        review_due_at,
+        created_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3::jsonb,
+        $4,
+        $5,
+        $6,
+        $7::timestamptz,
+        $8::timestamptz
+      )
+      ON CONFLICT (conflict_fingerprint) DO UPDATE
+      SET
+        canonical_locator_candidate = EXCLUDED.canonical_locator_candidate,
+        conflicting_aliases = EXCLUDED.conflicting_aliases,
+        detected_by = EXCLUDED.detected_by,
+        review_sla_hours = EXCLUDED.review_sla_hours,
+        review_due_at = EXCLUDED.review_due_at
+    `,
+    [
+      conflict.conflict_fingerprint,
+      conflict.canonical_locator_candidate,
+      JSON.stringify(conflict.conflicting_aliases),
+      conflict.detected_by,
+      conflict.status,
+      conflict.review_sla_hours,
+      conflict.review_due_at,
+      occurredAt
+    ]
+  );
+}
+
+async function upsertPackage(
+  tx: PostgresQueryExecutor,
+  packageCandidate: CatalogPackageCandidate,
+  occurredAt: string
+): Promise<void> {
+  await tx.query(
+    `
+      INSERT INTO registry.packages (
+        id,
+        package_id,
+        package_slug,
+        canonical_repo,
+        repo_aliases,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1::uuid,
+        $1::uuid,
+        $2,
+        $3,
+        $4::text[],
+        $5::timestamptz,
+        $5::timestamptz
+      )
+      ON CONFLICT (id) DO UPDATE
+      SET
+        package_id = EXCLUDED.package_id,
+        package_slug = EXCLUDED.package_slug,
+        canonical_repo = EXCLUDED.canonical_repo,
+        repo_aliases = EXCLUDED.repo_aliases,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      packageCandidate.package_id,
+      packageCandidate.package_slug,
+      packageCandidate.canonical_repo,
+      packageCandidate.repo_aliases,
+      occurredAt
+    ]
+  );
+}
+
+async function upsertAliases(
+  tx: PostgresQueryExecutor,
+  aliases: CatalogAliasCandidate[],
+  occurredAt: string
+): Promise<void> {
+  for (const alias of aliases) {
+    await tx.query(
+      `
+        INSERT INTO package_aliases (
+          package_id,
+          alias_type,
+          alias_value,
+          source_name,
+          active,
+          created_at,
+          retired_at
+        )
+        VALUES (
+          $1::uuid,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6::timestamptz,
+          CASE WHEN $5 THEN NULL ELSE $6::timestamptz END
+        )
+        ON CONFLICT (alias_type, alias_value) DO UPDATE
+        SET
+          package_id = EXCLUDED.package_id,
+          source_name = EXCLUDED.source_name,
+          active = EXCLUDED.active,
+          retired_at = CASE
+            WHEN EXCLUDED.active THEN NULL
+            ELSE COALESCE(package_aliases.retired_at, EXCLUDED.created_at)
+          END
+      `,
+      [
+        alias.package_id,
+        alias.alias_type,
+        alias.alias_value,
+        alias.source_name,
+        alias.active,
+        occurredAt
+      ]
+    );
+  }
+}
+
+async function upsertLineage(
+  tx: PostgresQueryExecutor,
+  lineageRows: CatalogFieldLineageCandidate[],
+  occurredAt: string
+): Promise<void> {
+  for (const lineage of lineageRows) {
+    await tx.query(
+      `
+        INSERT INTO package_field_lineage (
+          package_id,
+          field_name,
+          field_value_json,
+          field_source,
+          field_source_updated_at,
+          merge_run_id,
+          resolved_at
+        )
+        VALUES (
+          $1::uuid,
+          $2,
+          $3::jsonb,
+          $4,
+          $5::timestamptz,
+          $6,
+          $7::timestamptz
+        )
+        ON CONFLICT (package_id, field_name, merge_run_id) DO UPDATE
+        SET
+          field_value_json = EXCLUDED.field_value_json,
+          field_source = EXCLUDED.field_source,
+          field_source_updated_at = EXCLUDED.field_source_updated_at,
+          resolved_at = EXCLUDED.resolved_at
+      `,
+      [
+        lineage.package_id,
+        lineage.field_name,
+        JSON.stringify(lineage.field_value_json),
+        lineage.field_source,
+        lineage.field_source_updated_at,
+        lineage.merge_run_id,
+        occurredAt
+      ]
+    );
+  }
+}
+
+export function createCatalogPostgresAdapters(
+  options: CatalogPostgresAdapterOptions
+): CatalogPostgresAdapters {
+  return {
+    async persistIngestResult(result) {
+      await runInTransaction(options.db, async (tx) => {
+        await upsertPackageMergeRun(tx, result);
+
+        for (const conflict of result.conflicts) {
+          await upsertIdentityConflict(tx, conflict, result.occurred_at);
+        }
+
+        if (!result.package_candidate) {
+          return;
+        }
+
+        await upsertPackage(tx, result.package_candidate, result.occurred_at);
+        await upsertAliases(tx, result.alias_candidates, result.occurred_at);
+        await upsertLineage(tx, result.field_lineage, result.occurred_at);
+      });
+
+      return {
+        merge_run_id: result.merge_run_id,
+        package_id: result.package_candidate?.package_id ?? null,
+        queued_conflicts: result.conflicts.length
+      } satisfies CatalogIngestPersistenceResult;
+    },
+
+    async listPackages(limit, offset) {
+      const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+      const safeOffset = Math.max(0, Math.trunc(offset));
+
+      const result = await options.db.query<CatalogPackageListItem>(
+        `
+          SELECT
+            p.id::text AS package_id,
+            p.package_slug,
+            p.canonical_repo,
+            p.updated_at::text AS updated_at
+          FROM registry.packages p
+          ORDER BY p.updated_at DESC, p.id::text ASC
+          LIMIT $1 OFFSET $2
+        `,
+        [safeLimit, safeOffset]
+      );
+
+      return result.rows;
+    },
+
+    async getPackage(packageId) {
+      const packageResult = await options.db.query<CatalogPackageListItem>(
+        `
+          SELECT
+            p.id::text AS package_id,
+            p.package_slug,
+            p.canonical_repo,
+            p.updated_at::text AS updated_at
+          FROM registry.packages p
+          WHERE p.id = $1::uuid
+          LIMIT 1
+        `,
+        [packageId]
+      );
+
+      const packageRow = packageResult.rows[0];
+      if (!packageRow) {
+        return null;
+      }
+
+      const aliasesResult = await options.db.query<CatalogPackageAliasRecord>(
+        `
+          SELECT
+            alias_type,
+            alias_value,
+            source_name,
+            active
+          FROM package_aliases
+          WHERE package_id = $1::uuid
+          ORDER BY alias_type ASC, alias_value ASC
+        `,
+        [packageId]
+      );
+
+      const lineageResult = await options.db.query<CatalogPackageLineageSummaryRecord>(
+        `
+          SELECT DISTINCT ON (field_name)
+            field_name,
+            field_source,
+            field_source_updated_at::text AS field_source_updated_at,
+            merge_run_id
+          FROM package_field_lineage
+          WHERE package_id = $1::uuid
+          ORDER BY field_name, resolved_at DESC
+        `,
+        [packageId]
+      );
+
+      return {
+        ...packageRow,
+        aliases: aliasesResult.rows,
+        lineage_summary: lineageResult.rows
+      } satisfies CatalogPackageDetail;
+    },
+
+    async searchPackages(query, limit) {
+      const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+      const pattern = normalizeSearchQuery(query);
+      if (pattern.length === 0) {
+        return [];
+      }
+
+      const result = await options.db.query<CatalogPackageListItem>(
+        `
+          SELECT DISTINCT
+            p.id::text AS package_id,
+            p.package_slug,
+            p.canonical_repo,
+            p.updated_at::text AS updated_at
+          FROM registry.packages p
+          LEFT JOIN package_field_lineage lineage
+            ON lineage.package_id = p.id
+           AND lineage.field_name IN ('name', 'description', 'tags')
+          WHERE
+            p.package_slug ILIKE $1
+            OR COALESCE(p.canonical_repo, '') ILIKE $1
+            OR lineage.field_value_json::text ILIKE $1
+          ORDER BY p.updated_at DESC, p.id::text ASC
+          LIMIT $2
+        `,
+        [pattern, safeLimit]
+      );
+
+      return result.rows;
+    }
+  };
+}

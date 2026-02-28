@@ -1,0 +1,39 @@
+{
+  "name": "@forge/runtime-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./local-supervisor": {
+      "types": "./src/local-supervisor.ts",
+      "default": "./dist/local-supervisor.js"
+    },
+    "./remote-connectors": {
+      "types": "./src/remote-connectors.ts",
+      "default": "./dist/remote-connectors.js"
+    },
+    "./oauth-token-client": {
+      "types": "./src/oauth-token-client.ts",
+      "default": "./dist/oauth-token-client.js"
+    },
+    "./runtime-bootstrap": {
+      "types": "./src/runtime-bootstrap.ts",
+      "default": "./dist/runtime-bootstrap.js"
+    },
+    "./scope-sidecar": {
+      "types": "./src/scope-sidecar.ts",
+      "default": "./dist/scope-sidecar.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run tests"
+  }
+}

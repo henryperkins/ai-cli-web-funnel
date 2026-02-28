@@ -1,0 +1,36 @@
+{
+  "name": "forge-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Forge Phase 0/P0.5 monorepo scaffold",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces build --if-present",
+    "typecheck": "npm run --workspaces typecheck --if-present",
+    "test:workspaces": "npm run --workspaces test --if-present",
+    "test:integration-contract": "vitest run tests/integration tests/contract --exclude \"tests/integration-db/**\"",
+    "test:integration-db": "vitest run tests/integration-db --maxWorkers=1",
+    "test:integration-db:docker": "node scripts/run-integration-db-docker.mjs",
+    "test:e2e-local": "vitest run tests/e2e",
+    "test": "npm run build && npm run test:workspaces && npm run test:integration-contract",
+    "test:unit": "vitest run",
+    "run:catalog-ingest": "node scripts/run-catalog-ingest.mjs",
+    "run:retrieval-sync": "node scripts/run-retrieval-sync.mjs",
+    "run:outbox": "node scripts/run-outbox-processor.mjs",
+    "run:outbox-dead-letter": "node scripts/run-outbox-dead-letter-replay.mjs",
+    "run:control-plane": "node apps/control-plane/dist/server-main.js",
+    "verify:migrations:dr018": "node scripts/verify-dr018-migration.mjs",
+    "check": "npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "@forge/control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./http-handler": {
+      "types": "./src/http-handler.ts",
+      "default": "./dist/http-handler.js"
+    },
+    "./http-app": {
+      "types": "./src/http-app.ts",
+      "default": "./dist/http-app.js"
+    },
+    "./postgres-adapters": {
+      "types": "./src/postgres-adapters.ts",
+      "default": "./dist/postgres-adapters.js"
+    },
+    "./catalog-routes": {
+      "types": "./src/catalog-routes.ts",
+      "default": "./dist/catalog-routes.js"
+    },
+    "./install-lifecycle": {
+      "types": "./src/install-lifecycle.ts",
+      "default": "./dist/install-lifecycle.js"
+    },
+    "./server": {
+      "types": "./src/server.ts",
+      "default": "./dist/server.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run tests",
+    "start": "node dist/server-main.js"
+  }
+}
