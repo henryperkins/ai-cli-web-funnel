@@ -324,6 +324,21 @@ describe('forge http app composition', () => {
                 canonical_repo: 'github.com/acme/catalog-addon',
                 updated_at: '2026-03-01T00:00:00Z',
                 score: 0.91,
+                actions: {
+                  view_on_github: {
+                    label: 'View on GitHub',
+                    href: 'https://github.com/acme/catalog-addon'
+                  },
+                  open_in_vscode: {
+                    label: 'Open in VS Code',
+                    uri: 'vscode://forge.install?package_id=11111111-1111-4111-8111-111111111111&package_slug=acme%2Fcatalog-addon',
+                    fallback: {
+                      install_plan_path: '/v1/install/plans',
+                      package_id: '11111111-1111-4111-8111-111111111111',
+                      package_slug: 'acme/catalog-addon'
+                    }
+                  }
+                },
                 ranking: {
                   ranking_model_version: 'ranking-v0-foundation',
                   embedding_model_version: 'test',
@@ -587,6 +602,14 @@ describe('forge http app composition', () => {
       },
       body: null
     });
+    const installReplay = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-1/install',
+      headers: {
+        'idempotency-key': 'replay'
+      },
+      body: null
+    });
     const applyMissing = await app.handle({
       method: 'POST',
       path: '/v1/install/plans/missing/apply',
@@ -609,6 +632,8 @@ describe('forge http app composition', () => {
     expect(getPlan.statusCode).toBe(200);
     expect(applyReplay.statusCode).toBe(200);
     expect(applyReplay.headers['x-idempotent-replay']).toBe('true');
+    expect(installReplay.statusCode).toBe(200);
+    expect(installReplay.headers['x-idempotent-replay']).toBe('true');
     expect(applyMissing.statusCode).toBe(404);
     expect(verifyReplay.statusCode).toBe(200);
     expect(verifyReplay.headers['x-idempotent-replay']).toBe('true');

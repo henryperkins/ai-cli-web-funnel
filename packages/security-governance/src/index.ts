@@ -1092,3 +1092,4 @@ export * from './internal-outbox-dispatch-handlers.js';
 export * from './postgres-job-store.js';
 export * from './postgres-reporter-score-adapters.js';
 export * from './dead-letter-requeue.js';
+export * from './slo-rollup.js';

@@ -22,6 +22,8 @@ import { createRuntimeDaemonBootstrap } from '@forge/runtime-daemon/runtime-boot
 import type { CopilotAdapterContract } from '@forge/copilot-vscode-adapter';
 import type { IngestionDependencies } from './index.js';
 import { createCatalogRouteService } from './catalog-routes.js';
+import { createProfileRouteService, type ProfileRouteService } from './profile-routes.js';
+import { createProfilePostgresAdapters } from './profile-postgres-adapters.js';
 import { createEventIngestionHttpHandler } from './http-handler.js';
 import { resolveRuntimeFeatureFlagsFromEnv } from './runtime-feature-flags.js';
 import {
@@ -51,6 +53,71 @@ import {
   type PostgresQueryExecutor as ControlPlanePostgresQueryExecutor
 } from './postgres-adapters.js';
 
+const PROFILE_VISIBILITY_VALUES = new Set(['public', 'private', 'team']);
+
+function parseRequestPath(rawPath: string): {
+  pathname: string;
+  query: URLSearchParams;
+} {
+  const parsed = new URL(rawPath, 'http://forge.local');
+  return {
+    pathname: parsed.pathname,
+    query: parsed.searchParams
+  };
+}
+
+function parseBoundedInteger(
+  value: string | null,
+  min: number,
+  max: number
+): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function isProfileVisibility(value: string): value is import('@forge/shared-contracts').ProfileVisibility {
+  return PROFILE_VISIBILITY_VALUES.has(value);
+}
+
+function mapProfileRouteError(error: unknown): ForgeHttpAppResponse | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  const reason = error.message;
+
+  if (reason === 'profile_not_found') {
+    return jsonResponse(404, { status: 'not_found', reason: 'profile_not_found' });
+  }
+
+  if (reason === 'install_run_not_found') {
+    return jsonResponse(404, { status: 'not_found', reason: 'install_run_not_found' });
+  }
+
+  if (reason === 'install_lifecycle_unavailable') {
+    return jsonResponse(503, { status: 'not_ready', reason: 'install_lifecycle_unavailable' });
+  }
+
+  if (
+    reason.startsWith('create_') ||
+    reason.startsWith('import_') ||
+    reason.startsWith('list_') ||
+    reason.startsWith('install_')
+  ) {
+    return jsonResponse(422, { status: 'invalid_request', reason });
+  }
+
+  return null;
+}
+
 export interface ForgeHttpAppRequest {
   method: string;
   path: string;
@@ -71,6 +138,7 @@ export interface ForgeHttpAppDependencies {
   securityOptions?: SignedReporterIngestionOptions;
   catalogRoutes?: ReturnType<typeof createCatalogRouteService>;
   installLifecycle?: ReturnType<typeof createInstallLifecycleService>;
+  profileRoutes?: ProfileRouteService;
   readinessProbe?: () => Promise<{ ok: boolean; details?: string[] }>;
 }
 
@@ -160,9 +228,12 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
 
   return {
     async handle(request: ForgeHttpAppRequest): Promise<ForgeHttpAppResponse> {
+      const parsedPath = parseRequestPath(request.path);
+      const path = parsedPath.pathname;
+
       if (
         request.method === 'GET' &&
-        (request.path === '/health' || request.path === '/healthz')
+        (path === '/health' || path === '/healthz')
       ) {
         return jsonResponse(200, {
           status: 'ok'
@@ -171,7 +242,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
 
       if (
         request.method === 'GET' &&
-        (request.path === '/ready' || request.path === '/readyz')
+        (path === '/ready' || path === '/readyz')
       ) {
         if (!dependencies.readinessProbe) {
           return jsonResponse(200, {
@@ -191,7 +262,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         );
       }
 
-      if (request.method === 'GET' && request.path === '/v1/packages') {
+      if (request.method === 'GET' && path === '/v1/packages') {
         if (!dependencies.catalogRoutes) {
           return jsonResponse(503, {
             status: 'not_ready',
@@ -205,7 +276,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         });
       }
 
-      if (request.method === 'GET' && /^\/v1\/packages\/[^/]+$/i.test(request.path)) {
+      if (request.method === 'GET' && /^\/v1\/packages\/[^/]+$/i.test(path)) {
         if (!dependencies.catalogRoutes) {
           return jsonResponse(503, {
             status: 'not_ready',
@@ -213,7 +284,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           });
         }
 
-        const packageId = request.path.split('/')[3];
+        const packageId = path.split('/')[3];
         if (!packageId) {
           return jsonResponse(400, {
             status: 'invalid_request',
@@ -232,7 +303,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         return jsonResponse(200, detail);
       }
 
-      if (request.method === 'POST' && request.path === '/v1/packages/search') {
+      if (request.method === 'POST' && path === '/v1/packages/search') {
         if (!dependencies.catalogRoutes) {
           return jsonResponse(503, {
             status: 'not_ready',
@@ -258,7 +329,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         return jsonResponse(200, searchResponse);
       }
 
-      if (request.method === 'POST' && request.path === '/v1/install/plans') {
+      if (request.method === 'POST' && path === '/v1/install/plans') {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
@@ -356,7 +427,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         }
       }
 
-      if (request.method === 'GET' && /^\/v1\/install\/plans\/[^/]+$/i.test(request.path)) {
+      if (request.method === 'GET' && /^\/v1\/install\/plans\/[^/]+$/i.test(path)) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
@@ -364,7 +435,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           });
         }
 
-        const planId = request.path.split('/')[4];
+        const planId = path.split('/')[4];
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
@@ -385,7 +456,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
 
       if (
         request.method === 'POST' &&
-        /^\/v1\/install\/plans\/[^/]+\/(?:apply|install)$/i.test(request.path)
+        /^\/v1\/install\/plans\/[^/]+\/(?:apply|install)$/i.test(path)
       ) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
@@ -394,7 +465,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           });
         }
 
-        const planId = request.path.split('/')[4];
+        const planId = path.split('/')[4];
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
@@ -433,7 +504,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
 
       if (
         request.method === 'POST' &&
-        /^\/v1\/install\/plans\/[^/]+\/verify$/i.test(request.path)
+        /^\/v1\/install\/plans\/[^/]+\/verify$/i.test(path)
       ) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
@@ -442,7 +513,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           });
         }
 
-        const planId = request.path.split('/')[4];
+        const planId = path.split('/')[4];
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
@@ -479,7 +550,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         }
       }
 
-      if (request.method === 'POST' && request.path === '/v1/events') {
+      if (request.method === 'POST' && path === '/v1/events') {
         return eventHandler.handle({
           method: 'POST',
           path: '/v1/events',
@@ -489,7 +560,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         });
       }
 
-      if (request.method === 'POST' && request.path === '/v1/security/reports') {
+      if (request.method === 'POST' && path === '/v1/security/reports') {
         return securityHandler.handle({
           method: 'POST',
           path: '/v1/security/reports',
@@ -497,6 +568,227 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           body: request.body,
           ...(request.received_at ? { received_at: request.received_at } : {})
         });
+      }
+
+      // --- Profile routes ---
+
+      if (request.method === 'POST' && path === '/v1/profiles') {
+        if (!dependencies.profileRoutes) {
+          return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
+        }
+
+        const body = asObject(request.body);
+        if (
+          !body ||
+          typeof body.name !== 'string' ||
+          typeof body.author_id !== 'string' ||
+          !Array.isArray(body.packages)
+        ) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'missing_required_fields' });
+        }
+
+        try {
+          const result = await dependencies.profileRoutes.createProfile(
+            body as unknown as import('@forge/shared-contracts').ProfileCreateInput
+          );
+          return jsonResponse(201, result);
+        } catch (error) {
+          const mapped = mapProfileRouteError(error);
+          if (mapped) {
+            return mapped;
+          }
+          throw error;
+        }
+      }
+
+      if (request.method === 'GET' && path === '/v1/profiles') {
+        if (!dependencies.profileRoutes) {
+          return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
+        }
+
+        const limit = parseBoundedInteger(parsedPath.query.get('limit'), 1, 100);
+        const offset = parseBoundedInteger(parsedPath.query.get('offset'), 0, 1_000_000);
+
+        if (parsedPath.query.get('limit') !== null && limit === null) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'list_limit_out_of_range' });
+        }
+
+        if (parsedPath.query.get('offset') !== null && offset === null) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'list_offset_out_of_range' });
+        }
+
+        const authorIdRaw = parsedPath.query.get('author_id');
+        const authorId = authorIdRaw?.trim() ?? null;
+        if (authorIdRaw !== null && !authorId) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'list_author_id_invalid' });
+        }
+
+        const visibilityRaw = parsedPath.query.get('visibility');
+        if (visibilityRaw !== null && !isProfileVisibility(visibilityRaw)) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'list_visibility_invalid' });
+        }
+
+        const options = {
+          ...(limit !== null ? { limit } : {}),
+          ...(offset !== null ? { offset } : {}),
+          ...(authorId ? { author_id: authorId } : {}),
+          ...(visibilityRaw ? { visibility: visibilityRaw } : {})
+        };
+
+        try {
+          const result = await dependencies.profileRoutes.listProfiles(options);
+          return jsonResponse(200, result);
+        } catch (error) {
+          const mapped = mapProfileRouteError(error);
+          if (mapped) {
+            return mapped;
+          }
+          throw error;
+        }
+      }
+
+      if (request.method === 'GET' && /^\/v1\/profiles\/[^/]+$/i.test(path)) {
+        if (!dependencies.profileRoutes) {
+          return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
+        }
+
+        const profileId = path.split('/')[3];
+        if (!profileId) {
+          return jsonResponse(400, { status: 'invalid_request', reason: 'missing_profile_id' });
+        }
+
+        const result = await dependencies.profileRoutes.getProfile(profileId);
+        if (!result.profile) {
+          return jsonResponse(404, { status: 'not_found', reason: 'profile_not_found' });
+        }
+
+        return jsonResponse(200, result);
+      }
+
+      if (request.method === 'POST' && /^\/v1\/profiles\/[^/]+\/export$/i.test(path)) {
+        if (!dependencies.profileRoutes) {
+          return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
+        }
+
+        const profileId = path.split('/')[3];
+        if (!profileId) {
+          return jsonResponse(400, { status: 'invalid_request', reason: 'missing_profile_id' });
+        }
+
+        const result = await dependencies.profileRoutes.exportProfile(profileId);
+        if (!result.export) {
+          return jsonResponse(404, { status: 'not_found', reason: 'profile_not_found' });
+        }
+
+        return jsonResponse(200, result);
+      }
+
+      if (request.method === 'POST' && path === '/v1/profiles/import') {
+        if (!dependencies.profileRoutes) {
+          return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
+        }
+
+        const body = asObject(request.body);
+        if (
+          !body ||
+          body.format_version !== '1.0.0' ||
+          typeof body.profile !== 'object' ||
+          body.profile === null
+        ) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'invalid_import_payload' });
+        }
+
+        try {
+          const result = await dependencies.profileRoutes.importProfile(
+            body as unknown as import('@forge/shared-contracts').ProfileImportInput
+          );
+          return jsonResponse(201, result);
+        } catch (error) {
+          const mapped = mapProfileRouteError(error);
+          if (mapped) {
+            return mapped;
+          }
+          throw error;
+        }
+      }
+
+      if (
+        request.method === 'POST' &&
+        /^\/v1\/profiles\/[^/]+\/install$/i.test(path)
+      ) {
+        if (!dependencies.profileRoutes) {
+          return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
+        }
+
+        const profileId = path.split('/')[3];
+        if (!profileId) {
+          return jsonResponse(400, { status: 'invalid_request', reason: 'missing_profile_id' });
+        }
+
+        const body = asObject(request.body);
+        if (
+          !body ||
+          typeof body.org_id !== 'string' ||
+          typeof body.org_policy !== 'object' ||
+          body.org_policy === null
+        ) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'missing_required_fields' });
+        }
+
+        if (
+          body.mode !== undefined &&
+          body.mode !== 'plan_only' &&
+          body.mode !== 'apply_verify'
+        ) {
+          return jsonResponse(422, { status: 'invalid_request', reason: 'install_mode_invalid' });
+        }
+
+        try {
+          const correlationId = resolveCorrelationId(request.headers);
+          const result = await dependencies.profileRoutes.installProfile(profileId, {
+            org_id: body.org_id as string,
+            org_policy: body.org_policy as {
+              mcp_enabled: boolean;
+              server_allowlist: string[];
+              block_flagged: boolean;
+              permission_caps: { maxPermissions: number; disallowedPermissions: string[] };
+            },
+            ...(typeof body.mode === 'string'
+              ? { mode: body.mode as import('@forge/shared-contracts').ProfileInstallMode }
+              : {}),
+            ...(correlationId ? { correlation_id: correlationId } : {})
+          });
+
+          return jsonResponse(201, result);
+        } catch (error) {
+          const mapped = mapProfileRouteError(error);
+          if (mapped) {
+            return mapped;
+          }
+
+          throw error;
+        }
+      }
+
+      if (
+        request.method === 'GET' &&
+        /^\/v1\/profiles\/install-runs\/[^/]+$/i.test(path)
+      ) {
+        if (!dependencies.profileRoutes) {
+          return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
+        }
+
+        const runId = path.split('/')[4];
+        if (!runId) {
+          return jsonResponse(400, { status: 'invalid_request', reason: 'missing_run_id' });
+        }
+
+        const result = await dependencies.profileRoutes.getInstallRun(runId);
+        if (!result.run) {
+          return jsonResponse(404, { status: 'not_found', reason: 'install_run_not_found' });
+        }
+
+        return jsonResponse(200, result);
       }
 
       return jsonResponse(404, {
@@ -630,11 +922,18 @@ export function createForgeHttpAppFromPostgres(
     ...(dependencies.installLogger ? { logger: dependencies.installLogger } : {})
   });
 
+  const profileRoutes = createProfileRouteService({
+    profileAdapters: createProfilePostgresAdapters({ db: dependencies.db }),
+    installLifecycle,
+    ...(dependencies.idFactory ? { idFactory: dependencies.idFactory } : {})
+  });
+
   return createForgeHttpApp({
     eventIngestion,
     securityIngestion,
     catalogRoutes,
     installLifecycle,
+    profileRoutes,
     ...(dependencies.securityOptions
       ? {
           securityOptions: dependencies.securityOptions

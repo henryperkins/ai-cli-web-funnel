@@ -69,8 +69,7 @@ export interface IngestionDependencies {
 export interface IngestionOutboxEnvelope {
   event_type:
     | 'fraud.reconcile.requested'
-    | 'ranking.sync.requested'
-    | 'metrics.aggregate.requested';
+    | 'ranking.sync.requested';
   dedupe_key: string;
   payload: Record<string, unknown>;
   occurred_at: string;

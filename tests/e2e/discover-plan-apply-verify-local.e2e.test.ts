@@ -287,7 +287,7 @@ function buildLifecycleHarness() {
   };
 }
 
-describe('e2e local: discover -> plan -> apply -> verify', () => {
+describe('e2e local: discover -> plan -> install -> verify', () => {
   it('executes full flow with retrieval metadata assertions and idempotent replay', async () => {
     const lifecycle = buildLifecycleHarness();
     const app = createForgeHttpApp({
@@ -337,6 +337,21 @@ describe('e2e local: discover -> plan -> apply -> verify', () => {
                 canonical_repo: 'github.com/acme/forge-addon',
                 updated_at: '2026-03-01T00:00:00Z',
                 score: 0.91,
+                actions: {
+                  view_on_github: {
+                    label: 'View on GitHub',
+                    href: 'https://github.com/acme/forge-addon'
+                  },
+                  open_in_vscode: {
+                    label: 'Open in VS Code',
+                    uri: 'vscode://forge.install?package_id=11111111-1111-4111-8111-111111111111&package_slug=acme%2Fforge-addon',
+                    fallback: {
+                      install_plan_path: '/v1/install/plans',
+                      package_id: '11111111-1111-4111-8111-111111111111',
+                      package_slug: 'acme/forge-addon'
+                    }
+                  }
+                },
                 ranking: {
                   ranking_model_version: 'ranking-v0-foundation',
                   embedding_model_version: 'text-embedding-3-large',
@@ -448,16 +463,16 @@ describe('e2e local: discover -> plan -> apply -> verify', () => {
     expect(planReplay.statusCode).toBe(201);
     expect(planReplay.headers['x-idempotent-replay']).toBe('true');
 
-    const apply = await app.handle({
+    const install = await app.handle({
       method: 'POST',
-      path: '/v1/install/plans/plan-wave7-001/apply',
+      path: '/v1/install/plans/plan-wave7-001/install',
       headers: {
         'idempotency-key': 'apply-wave7-idem-1'
       },
       body: null
     });
-    expect(apply.statusCode).toBe(200);
-    expect((apply.body as { status: string }).status).toBe('apply_succeeded');
+    expect(install.statusCode).toBe(200);
+    expect((install.body as { status: string }).status).toBe('apply_succeeded');
 
     const verify = await app.handle({
       method: 'POST',

@@ -21,15 +21,18 @@
     "run:retrieval-sync": "node scripts/run-retrieval-sync.mjs",
     "run:outbox": "node scripts/run-outbox-processor.mjs",
     "run:outbox-dead-letter": "node scripts/run-outbox-dead-letter-replay.mjs",
+    "run:slo-rollup": "node scripts/run-slo-rollup.mjs",
     "run:control-plane": "node apps/control-plane/dist/server-main.js",
     "verify:migrations:dr018": "node scripts/verify-dr018-migration.mjs",
-    "check": "npm run typecheck && npm run test"
+    "check:governance": "node scripts/check-governance-status-drift.mjs",
+    "check": "npm run check:governance && npm run typecheck && npm run test"
   },
   "dependencies": {
     "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "@types/pg": "^8.16.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

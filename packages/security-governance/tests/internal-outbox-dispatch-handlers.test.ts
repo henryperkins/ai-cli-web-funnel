@@ -92,4 +92,38 @@ describe('postgres internal outbox dispatch handlers', () => {
       'outbox.internal_handler.replayed'
     ]);
   });
+
+  it('records deterministic effect payload for security.report.accepted', async () => {
+    const db = new FakeDb();
+    const handlers = createPostgresInternalOutboxDispatchHandlers({ db });
+
+    await handlers.security_report_accepted?.({
+      id: '33333333-3333-4333-8333-333333333333',
+      dedupe_key: 'report-1:pkg-1:accepted',
+      event_type: 'security.report.accepted',
+      payload: {
+        report_id: 'report-1',
+        package_id: '44444444-4444-4444-8444-444444444444',
+        reason_code: 'needs_human_review'
+      },
+      attempt_count: 1
+    });
+
+    const effectInsert = db.calls.find((entry) =>
+      entry.sql.includes('outbox_internal_dispatch_effects')
+    );
+    expect(effectInsert).toBeTruthy();
+    const params = effectInsert?.params ?? [];
+    expect(params[0]).toBe('33333333-3333-4333-8333-333333333333');
+    expect(params[2]).toBe('security.report.accepted');
+    expect(params[3]).toBe('security_report_accepted_recorded');
+    expect(typeof params[4]).toBe('string');
+    expect(String(params[4])).toContain('report-1');
+
+    const dispatchInsert = db.calls.find((entry) =>
+      entry.sql.includes('outbox_internal_dispatch_runs')
+    );
+    expect(dispatchInsert?.params[2]).toBe('security.report.accepted');
+    expect(dispatchInsert?.params[3]).toBe('security_report_accepted');
+  });
 });

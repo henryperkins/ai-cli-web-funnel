@@ -80,7 +80,14 @@ export async function resetIntegrationTables(pool: Pool): Promise<void> {
       install_apply_attempts,
       install_plan_audit,
       install_plan_actions,
-      install_plans
+      install_plans,
+      profile_audit,
+      profile_install_run_plans,
+      profile_install_runs,
+      profile_packages,
+      profiles,
+      operational_slo_snapshots,
+      operational_slo_rollup_runs
     RESTART IDENTITY CASCADE
   `);
 }

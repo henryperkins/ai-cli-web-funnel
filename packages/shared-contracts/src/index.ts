@@ -4,5 +4,6 @@ export * from './event-validation.js';
 export * from './feature-flags.js';
 export * from './identity.js';
 export * from './merge-precedence.js';
+export * from './profiles.js';
 export * from './telemetry-envelope.js';
 export * from './trust-fraud.js';

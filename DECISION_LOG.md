@@ -225,3 +225,17 @@ This log captures implementation-time decisions taken while AQ/MQ items are stil
 - Decision: add GitHub Actions workflow running baseline checks plus integration-db docker flow, and update runbooks for retrieval sync recovery and dead-letter replay operations.
 - Rationale: converts Wave 7 hardening into continuously enforced validation and reproducible operator playbooks.
 - Related: DR-018, AQ-050, MQ-024, MQ-038.
+
+## DLOG-0033 (2026-02-28)
+
+- Scope: Wave 9 scope lock and acceptance-gate baseline.
+- Decision: lock Wave 9 implementation to profile orchestration closure (validation, run-plan linkage, execution modes), SLO rollup foundations + operator runner, event-family ownership codification, hermetic local stack, and governance-automation closure, with additive migrations only.
+- Rationale: keeps implementation auditable against explicit Step 1..12 gates while preserving governance boundary semantics (Open/Proposed unchanged unless separately approved).
+- Related: AQ-054, AQ-056, DR-011, DR-017, DR-018, MQ-024, MQ-029, MQ-033, MQ-035, MQ-038.
+
+## DLOG-0034 (2026-02-28)
+
+- Scope: Wave 9 SLO rollup, local stack, and governance automation implementation.
+- Decision: implement operational SLO rollup service with 7 metric families (outbox dead-letter rate, retrieval semantic fallback rate, install apply/verify success rate, lifecycle replay ratio, profile run success rate, governance recompute dispatch rate), additive migration 013, hermetic docker-compose local stack (Postgres 16 + Qdrant), and governance drift checker script.
+- Rationale: closes observability and operator-readiness gaps while preserving existing replay/idempotency invariants and governance status boundaries.
+- Related: AQ-054, AQ-056, MQ-033, MQ-038.

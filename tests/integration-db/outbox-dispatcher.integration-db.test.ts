@@ -349,4 +349,66 @@ describe('integration-db: deterministic outbox dispatcher', () => {
       upserted_count: 1
     });
   });
+
+  it('dispatches security.report.accepted through deterministic internal handlers', async () => {
+    await pool.query(
+      `
+        INSERT INTO ingestion_outbox (
+          event_type,
+          dedupe_key,
+          payload,
+          source_service,
+          status,
+          available_at,
+          occurred_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'security.report.accepted',
+          'dedupe-security-report-accepted',
+          '{"report_id":"report-1","package_id":"55555555-5555-4555-8555-555555555555","reason_code":"needs_human_review"}'::jsonb,
+          'security-governance',
+          'pending',
+          '2026-03-01T10:00:00Z'::timestamptz,
+          '2026-03-01T10:00:00Z'::timestamptz,
+          '2026-03-01T10:00:00Z'::timestamptz,
+          '2026-03-01T10:00:00Z'::timestamptz
+        )
+      `
+    );
+
+    const dispatcher = createDeterministicOutboxDispatcher(
+      createPostgresInternalOutboxDispatchHandlers({ db })
+    );
+    const store = createPostgresOutboxJobStore({
+      db,
+      maxAttempts: 3,
+      retryBackoffSeconds: 1
+    });
+
+    const processor = createOutboxProcessorJob(store, dispatcher);
+    const result = await processor.run('production', '2026-03-01T10:00:01Z', 10);
+    expect(result).toMatchObject({
+      claimed: 1,
+      dispatched: 1,
+      completed: 1,
+      failed: 0
+    });
+
+    const effect = await pool.query<{
+      event_type: string;
+      effect_code: string;
+    }>(
+      `
+        SELECT event_type, effect_code
+        FROM outbox_internal_dispatch_effects
+        WHERE dedupe_key = 'dedupe-security-report-accepted'
+      `
+    );
+    expect(effect.rows[0]).toEqual({
+      event_type: 'security.report.accepted',
+      effect_code: 'security_report_accepted_recorded'
+    });
+  });
 });
