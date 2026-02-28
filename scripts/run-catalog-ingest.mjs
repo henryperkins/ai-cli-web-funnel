@@ -6,6 +6,7 @@ import process from 'node:process';
 import { Pool } from 'pg';
 import { createCatalogIngestService } from '@forge/catalog';
 import { createCatalogPostgresAdapters } from '@forge/catalog/postgres-adapters';
+import { normalizeGitHubRepos } from '@forge/catalog/sources/github-connector';
 
 function getArg(flag) {
   const index = process.argv.indexOf(flag);
@@ -131,6 +132,8 @@ if (!inputPath) {
   process.exit(1);
 }
 
+const sourceMode = (getArg('--source') ?? '').toLowerCase();
+
 let parsed;
 try {
   parsed = JSON.parse(readFileSync(inputPath, 'utf8'));
@@ -139,6 +142,22 @@ try {
     `Failed to read/parse input JSON: ${error instanceof Error ? error.message : 'unknown_error'}`
   );
   process.exit(1);
+}
+
+if (sourceMode === 'github') {
+  const repos = Array.isArray(parsed) ? parsed : parsed.repos ?? parsed.items ?? [];
+  const toolKind = getArg('--tool-kind') ?? 'mcp';
+  const { candidates, skipped } = normalizeGitHubRepos(repos, { toolKind });
+  if (skipped.length > 0) {
+    logEvent('catalog_ingest.github_skipped', { count: skipped.length, skipped });
+  }
+  parsed = {
+    merge_run_id: `github-${createHash('sha256').update(JSON.stringify(repos.map((r) => r.id))).digest('hex').slice(0, 16)}`,
+    occurred_at: new Date().toISOString(),
+    source_snapshot: { source: 'github', repo_count: repos.length },
+    detected_by: 'github-connector',
+    candidates
+  };
 }
 
 const runs = normalizeInput(parsed);

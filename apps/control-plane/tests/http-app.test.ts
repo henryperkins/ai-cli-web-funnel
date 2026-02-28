@@ -413,7 +413,7 @@ describe('forge http app composition', () => {
     expect((search.body as { semantic_fallback: boolean }).semantic_fallback).toBe(false);
   });
 
-  it('serves install lifecycle plan/apply/verify routes with replay/conflict semantics', async () => {
+  it('serves install lifecycle plan/apply/update/remove/rollback/verify routes with replay/conflict semantics', async () => {
     const app = createForgeHttpApp({
       eventIngestion: createInMemoryEventDependencies(),
       securityIngestion: {
@@ -511,6 +511,57 @@ describe('forge http app composition', () => {
             plan_id: planId,
             attempt_number: 1,
             reason_code: null
+          };
+        },
+        async updatePlan(planId, idempotencyKey, _correlationId, targetVersion) {
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+
+          return {
+            status: 'update_succeeded',
+            replayed: idempotencyKey === 'replay',
+            plan_id: planId,
+            attempt_number: 1,
+            reason_code: null,
+            target_version: targetVersion ?? null
+          };
+        },
+        async removePlan(planId, idempotencyKey) {
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+
+          return {
+            status: 'remove_succeeded',
+            replayed: idempotencyKey === 'replay',
+            plan_id: planId,
+            attempt_number: 1,
+            reason_code: null
+          };
+        },
+        async rollbackPlan(planId, idempotencyKey) {
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+
+          return {
+            status: 'rollback_succeeded',
+            replayed: idempotencyKey === 'replay',
+            plan_id: planId,
+            attempt_number: 1,
+            reason_code: null,
+            rollback_mode: 'cleanup_partial_install',
+            source_operation: 'apply'
           };
         },
         async verifyPlan(planId, idempotencyKey) {
@@ -624,6 +675,60 @@ describe('forge http app composition', () => {
       },
       body: null
     });
+    const updateReplay = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-1/update',
+      headers: {
+        'idempotency-key': 'replay'
+      },
+      body: {
+        target_version: '1.2.3'
+      }
+    });
+    const updateMissing = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/missing/update',
+      headers: {},
+      body: {
+        target_version: '1.2.3'
+      }
+    });
+    const removeReplay = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-1/remove',
+      headers: {
+        'idempotency-key': 'replay'
+      },
+      body: null
+    });
+    const uninstallReplay = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-1/uninstall',
+      headers: {
+        'idempotency-key': 'replay'
+      },
+      body: null
+    });
+    const removeMissing = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/missing/remove',
+      headers: {},
+      body: null
+    });
+    const rollbackReplay = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-1/rollback',
+      headers: {
+        'idempotency-key': 'replay'
+      },
+      body: null
+    });
+    const rollbackMissing = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/missing/rollback',
+      headers: {},
+      body: null
+    });
 
     expect(invalidCreate.statusCode).toBe(422);
     expect(created.statusCode).toBe(201);
@@ -637,5 +742,246 @@ describe('forge http app composition', () => {
     expect(applyMissing.statusCode).toBe(404);
     expect(verifyReplay.statusCode).toBe(200);
     expect(verifyReplay.headers['x-idempotent-replay']).toBe('true');
+    expect(updateReplay.statusCode).toBe(200);
+    expect(updateReplay.headers['x-idempotent-replay']).toBe('true');
+    expect((updateReplay.body as { status: string; target_version: string | null })).toMatchObject({
+      status: 'update_succeeded',
+      target_version: '1.2.3'
+    });
+    expect(updateMissing.statusCode).toBe(404);
+    expect(removeReplay.statusCode).toBe(200);
+    expect(removeReplay.headers['x-idempotent-replay']).toBe('true');
+    expect(uninstallReplay.statusCode).toBe(200);
+    expect(uninstallReplay.headers['x-idempotent-replay']).toBe('true');
+    expect(removeMissing.statusCode).toBe(404);
+    expect(rollbackReplay.statusCode).toBe(200);
+    expect(rollbackReplay.headers['x-idempotent-replay']).toBe('true');
+    expect(rollbackMissing.statusCode).toBe(404);
+  });
+
+  it('validates and forwards dependency resolution payloads on plan create', async () => {
+    let capturedCreatePlanRequest: Record<string, unknown> | null = null;
+
+    const app = createForgeHttpApp({
+      eventIngestion: createInMemoryEventDependencies(),
+      securityIngestion: {
+        reporters: new InMemoryReporterDirectory({}),
+        nonceStore: new InMemoryReporterNonceStore(),
+        persistence: new InMemorySecurityReportStore(),
+        signatureVerifier: {
+          async verify() {
+            return true;
+          }
+        }
+      },
+      installLifecycle: {
+        async createPlan(request) {
+          capturedCreatePlanRequest = request as unknown as Record<string, unknown>;
+
+          if (request.package_id === 'pkg-cycle') {
+            throw new Error('dependency_resolution_failed: cycle_detected: pkg-a,pkg-b');
+          }
+
+          return {
+            status: 'planned',
+            replayed: false,
+            plan_id: 'plan-deps-http-1',
+            package_id: request.package_id,
+            package_slug: request.package_slug ?? 'acme/deps-addon',
+            policy_outcome: 'allowed',
+            policy_reason_code: null,
+            security_state: 'none',
+            action_count: 2,
+            dependency_resolution: {
+              resolved_order: ['pkg-dep', request.package_id],
+              resolved_count: 2,
+              conflicts: []
+            }
+          };
+        },
+        async getPlan() {
+          return null;
+        },
+        async applyPlan() {
+          return {
+            status: 'apply_succeeded',
+            replayed: false,
+            plan_id: 'unused',
+            attempt_number: 1,
+            reason_code: null
+          };
+        },
+        async updatePlan() {
+          return {
+            status: 'update_succeeded',
+            replayed: false,
+            plan_id: 'unused',
+            attempt_number: 1,
+            reason_code: null,
+            target_version: null
+          };
+        },
+        async removePlan() {
+          return {
+            status: 'remove_succeeded',
+            replayed: false,
+            plan_id: 'unused',
+            attempt_number: 1,
+            reason_code: null
+          };
+        },
+        async rollbackPlan() {
+          return {
+            status: 'rollback_succeeded',
+            replayed: false,
+            plan_id: 'unused',
+            attempt_number: 1,
+            reason_code: null,
+            rollback_mode: 'cleanup_partial_install',
+            source_operation: 'apply'
+          };
+        },
+        async verifyPlan() {
+          return {
+            status: 'verify_succeeded',
+            replayed: false,
+            plan_id: 'unused',
+            attempt_number: 1,
+            readiness: true,
+            reason_code: null,
+            stages: []
+          };
+        }
+      }
+    });
+
+    const success = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {
+        'idempotency-key': 'deps-idem-1'
+      },
+      body: {
+        package_id: 'pkg-root',
+        package_slug: 'acme/deps-addon',
+        org_id: 'org-deps',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: {
+            maxPermissions: 5,
+            disallowedPermissions: []
+          }
+        },
+        dependency_edges: [
+          {
+            from_package_id: 'pkg-root',
+            to_package_id: 'pkg-dep',
+            constraint: 'any',
+            required: true
+          }
+        ],
+        known_package_ids: ['pkg-root', 'pkg-dep']
+      }
+    });
+
+    expect(success.statusCode).toBe(201);
+    const successBody = success.body as {
+      dependency_resolution?: {
+        resolved_order: string[];
+        resolved_count: number;
+      };
+    };
+    expect(successBody.dependency_resolution?.resolved_order).toEqual(['pkg-dep', 'pkg-root']);
+    expect(successBody.dependency_resolution?.resolved_count).toBe(2);
+
+    expect(capturedCreatePlanRequest).not.toBeNull();
+    expect(capturedCreatePlanRequest?.dependency_edges).toEqual([
+      {
+        from_package_id: 'pkg-root',
+        to_package_id: 'pkg-dep',
+        constraint: 'any',
+        required: true
+      }
+    ]);
+    expect(capturedCreatePlanRequest?.known_package_ids).toEqual(['pkg-root', 'pkg-dep']);
+
+    const invalidEdges = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-root',
+        org_id: 'org-deps',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: {
+            maxPermissions: 5,
+            disallowedPermissions: []
+          }
+        },
+        dependency_edges: [{ from_package_id: 'pkg-root' }]
+      }
+    });
+
+    expect(invalidEdges.statusCode).toBe(422);
+    expect((invalidEdges.body as { reason: string }).reason).toBe('dependency_edges_invalid');
+
+    const invalidKnownIds = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-root',
+        org_id: 'org-deps',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: {
+            maxPermissions: 5,
+            disallowedPermissions: []
+          }
+        },
+        known_package_ids: ['pkg-root', 42]
+      }
+    });
+
+    expect(invalidKnownIds.statusCode).toBe(422);
+    expect((invalidKnownIds.body as { reason: string }).reason).toBe('known_package_ids_invalid');
+
+    const dependencyFailure = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-cycle',
+        org_id: 'org-deps',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: {
+            maxPermissions: 5,
+            disallowedPermissions: []
+          }
+        }
+      }
+    });
+
+    expect(dependencyFailure.statusCode).toBe(422);
+    const failureBody = dependencyFailure.body as {
+      status: string;
+      reason: string;
+    };
+    expect(failureBody.status).toBe('dependency_resolution_failed');
+    expect(failureBody.reason).toContain('dependency_resolution_failed:');
   });
 });

@@ -17,6 +17,11 @@ import {
   type ReporterSignatureValidationInput,
   type ReporterSignatureVerifier
 } from '@forge/security-governance';
+import {
+  resolveDependencyGraph,
+  type DependencyConflict,
+  type DependencyEdge
+} from '@forge/shared-contracts';
 
 export interface PostgresQueryResult<Row> {
   rows: Row[];
@@ -39,7 +44,11 @@ export type InstallPlanStatus =
   | 'apply_succeeded'
   | 'apply_failed'
   | 'verify_succeeded'
-  | 'verify_failed';
+  | 'verify_failed'
+  | 'remove_succeeded'
+  | 'remove_failed'
+  | 'rollback_succeeded'
+  | 'rollback_failed';
 
 export type InstallActionType = 'write_entry' | 'remove_entry' | 'skip_scope';
 export type InstallActionStatus = 'pending' | 'applied' | 'failed' | 'skipped';
@@ -48,6 +57,12 @@ export type InstallLifecycleOutboxEventType =
   | 'install.plan.created'
   | 'install.apply.succeeded'
   | 'install.apply.failed'
+  | 'install.update.succeeded'
+  | 'install.update.failed'
+  | 'install.remove.succeeded'
+  | 'install.remove.failed'
+  | 'install.rollback.succeeded'
+  | 'install.rollback.failed'
   | 'install.verify.succeeded'
   | 'install.verify.failed';
 
@@ -136,6 +151,8 @@ export interface InstallPlanCreateRequest {
   org_policy: PolicyPreflightInput['org_policy'];
   trust_state?: RuntimeStartRequest['trust_state'];
   trust_reset_trigger?: RuntimeStartRequest['trust_reset_trigger'];
+  dependency_edges?: DependencyEdge[];
+  known_package_ids?: string[];
 }
 
 export interface InstallRuntimeContext {
@@ -143,6 +160,12 @@ export interface InstallRuntimeContext {
   trust_reset_trigger: RuntimeStartRequest['trust_reset_trigger'];
   mode: RuntimeStartRequest['mode'];
   transport: RuntimeStartRequest['transport'];
+}
+
+export interface DependencyResolutionSummary {
+  resolved_order: string[];
+  resolved_count: number;
+  conflicts: DependencyConflict[];
 }
 
 export interface InstallPlanCreateResponse {
@@ -155,6 +178,7 @@ export interface InstallPlanCreateResponse {
   policy_reason_code: string | null;
   security_state: string;
   action_count: number;
+  dependency_resolution?: DependencyResolutionSummary;
 }
 
 export interface InstallApplyResponse {
@@ -163,6 +187,33 @@ export interface InstallApplyResponse {
   plan_id: string;
   attempt_number: number;
   reason_code: string | null;
+}
+
+export interface InstallUpdateResponse {
+  status: 'update_succeeded' | 'update_failed';
+  replayed: boolean;
+  plan_id: string;
+  attempt_number: number;
+  reason_code: string | null;
+  target_version: string | null;
+}
+
+export interface InstallRemoveResponse {
+  status: 'remove_succeeded' | 'remove_failed';
+  replayed: boolean;
+  plan_id: string;
+  attempt_number: number;
+  reason_code: string | null;
+}
+
+export interface InstallRollbackResponse {
+  status: 'rollback_succeeded' | 'rollback_failed';
+  replayed: boolean;
+  plan_id: string;
+  attempt_number: number;
+  reason_code: string | null;
+  rollback_mode: 'cleanup_partial_install' | 'restore_removed_entries';
+  source_operation: 'apply' | 'update' | 'remove' | 'rollback';
 }
 
 export interface InstallVerifyResponse {
@@ -581,7 +632,7 @@ async function appendAuditRow(
   tx: PostgresQueryExecutor,
   planInternalId: string,
   input: {
-    stage: 'plan' | 'apply' | 'verify';
+    stage: 'plan' | 'apply' | 'verify' | 'remove' | 'rollback';
     event_type: string;
     status: string;
     reason_code: string | null;
@@ -649,6 +700,74 @@ function createScopeMap(scopes: CopilotScopeDescriptor[]): ScopeMapping {
     map[scope.scope] = scope;
   }
   return map;
+}
+
+async function resolveRequiredProfileReferenceCount(
+  db: PostgresQueryExecutor,
+  packageId: string
+): Promise<number> {
+  try {
+    const result = await db.query<{ required_count: string }>(
+      `
+        SELECT COUNT(*)::text AS required_count
+        FROM profile_packages
+        WHERE package_id = $1::uuid
+          AND required = TRUE
+      `,
+      [packageId]
+    );
+
+    return Number.parseInt(result.rows[0]?.required_count ?? '0', 10);
+  } catch (error) {
+    const postgresCode = (error as { code?: string })?.code;
+    if (postgresCode === '42P01') {
+      return 0;
+    }
+
+    throw error;
+  }
+}
+
+async function resolveLatestApplyAttempt(
+  db: PostgresQueryExecutor,
+  planInternalId: string
+): Promise<{
+  attempt_number: number;
+  status: 'succeeded' | 'failed' | 'replayed';
+  reason_code: string | null;
+  details: Record<string, unknown>;
+} | null> {
+  const result = await db.query<{
+    attempt_number: number;
+    status: 'succeeded' | 'failed' | 'replayed';
+    reason_code: string | null;
+    details: unknown;
+  }>(
+    `
+      SELECT
+        attempt_number,
+        status,
+        reason_code,
+        details
+      FROM install_apply_attempts
+      WHERE plan_internal_id = $1::uuid
+      ORDER BY attempt_number DESC
+      LIMIT 1
+    `,
+    [planInternalId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    attempt_number: row.attempt_number,
+    status: row.status,
+    reason_code: row.reason_code,
+    details: parseJsonObject(row.details)
+  };
 }
 
 function buildLifecycleRequestHash(payload: unknown): string {
@@ -964,6 +1083,39 @@ export function createInstallLifecycleService(
         transport: 'stdio'
       };
 
+      // Resolve dependency graph if edges are provided
+      let dependencyResolution: DependencyResolutionSummary | undefined;
+      if (request.dependency_edges && request.dependency_edges.length > 0) {
+        const knownIds = request.known_package_ids
+          ? new Set([request.package_id, ...request.known_package_ids])
+          : new Set([
+              request.package_id,
+              ...request.dependency_edges.flatMap((edge) => [
+                edge.from_package_id,
+                edge.to_package_id
+              ])
+            ]);
+
+        const graphResult = resolveDependencyGraph({
+          root_package_ids: [request.package_id],
+          edges: request.dependency_edges,
+          known_package_ids: knownIds
+        });
+
+        if (!graphResult.ok) {
+          const conflictDetails = graphResult.conflicts
+            .map((c) => `${c.kind}: ${c.message}`)
+            .join('; ');
+          throw new Error(`dependency_resolution_failed: ${conflictDetails}`);
+        }
+
+        dependencyResolution = {
+          resolved_order: graphResult.resolved_order,
+          resolved_count: graphResult.resolved_order.length,
+          conflicts: graphResult.conflicts
+        };
+      }
+
       const planId = idFactory();
       const effectiveCorrelationId = request.correlation_id ?? planId;
       const planHash = sha256Hex(
@@ -973,7 +1125,8 @@ export function createInstallLifecycleService(
           policy_reason_code: policy.reason_code,
           security_state: securityProjection.state,
           actions,
-          runtime_context: runtimeContext
+          runtime_context: runtimeContext,
+          dependency_resolution: dependencyResolution ?? null
         })
       );
 
@@ -1120,7 +1273,8 @@ export function createInstallLifecycleService(
         policy_outcome: policy.outcome,
         policy_reason_code: policy.reason_code,
         security_state: securityProjection.state,
-        action_count: actions.length
+        action_count: actions.length,
+        ...(dependencyResolution !== undefined ? { dependency_resolution: dependencyResolution } : {})
       };
 
       if (idempotencyKey) {
@@ -1394,6 +1548,848 @@ export function createInstallLifecycleService(
         attempt_number: attemptNumber,
         status: finalStatus,
         reason_code: failedReason
+      });
+
+      return response;
+    },
+
+    async updatePlan(
+      planId: string,
+      idempotencyKey: string | null,
+      correlationId: string | null,
+      targetVersion?: string | null
+    ): Promise<InstallUpdateResponse> {
+      const nowIso = now().toISOString();
+      const idempotencyScope = `POST:/v1/install/plans/${planId}/update`;
+      const requestHash = buildLifecycleRequestHash({
+        plan_id: planId,
+        target_version: targetVersion ?? null
+      });
+
+      if (idempotencyKey) {
+        const existing = await dependencies.idempotency.get(idempotencyScope, idempotencyKey);
+        if (existing) {
+          if (existing.request_hash !== requestHash) {
+            throw new Error('idempotency_conflict');
+          }
+
+          return {
+            ...(existing.response_body as InstallUpdateResponse),
+            replayed: true
+          };
+        }
+      }
+
+      const plan = await loadPlan(dependencies.db, planId);
+      if (!plan) {
+        throw new Error('plan_not_found');
+      }
+
+      const allowedStatuses: InstallPlanStatus[] = [
+        'apply_succeeded',
+        'verify_succeeded',
+        'verify_failed'
+      ];
+      if (!allowedStatuses.includes(plan.status)) {
+        throw new Error('update_invalid_plan_state');
+      }
+
+      const attemptNumber = await resolveAttemptNumber(
+        dependencies.db,
+        'install_apply_attempts',
+        plan.internal_id
+      );
+      const effectiveCorrelationId =
+        correlationId ?? plan.correlation_id ?? plan.plan_id;
+
+      const scopeMap = createScopeMap(await dependencies.copilotAdapter.discover_scopes());
+      const entry: CopilotServerEntry = {
+        package_id: plan.package_id,
+        package_slug: plan.package_slug,
+        mode: 'local',
+        transport: 'stdio',
+        trust_state: plan.runtime_context.trust_state
+      };
+
+      let failedReason: string | null = null;
+
+      await runInTransaction(dependencies.db, async (tx) => {
+        for (const action of plan.actions) {
+          if (action.action_type === 'skip_scope') {
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'skipped',
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso]
+            );
+            continue;
+          }
+
+          const scope = scopeMap[action.scope];
+          if (!scope) {
+            failedReason = 'scope_not_found';
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'failed',
+                  reason_code = $4,
+                  last_error = $4,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso, failedReason]
+            );
+            break;
+          }
+
+          try {
+            await dependencies.copilotAdapter.write_entry(scope, entry);
+
+            if (dependencies.runtimeVerifier.writeScopeSidecarGuarded) {
+              await dependencies.runtimeVerifier.writeScopeSidecarGuarded({
+                scope_hash: sha256Hex(`${plan.package_id}:${scope.scope}:${scope.scope_path}`),
+                scope_daemon_owned: scope.daemon_owned,
+                record: {
+                  package_id: plan.package_id,
+                  package_slug: plan.package_slug,
+                  plan_id: plan.plan_id,
+                  applied_at: nowIso,
+                  scope: scope.scope,
+                  scope_path: scope.scope_path
+                }
+              });
+            }
+
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'applied',
+                  reason_code = 'update_ok',
+                  last_error = NULL,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso]
+            );
+          } catch (error) {
+            failedReason =
+              error instanceof Error && error.name === 'CopilotFilesystemAdapterError'
+                ? `adapter_${error.message}`
+                : 'adapter_write_failed';
+
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'failed',
+                  reason_code = $4,
+                  last_error = $5,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [
+                plan.internal_id,
+                action.action_order,
+                nowIso,
+                failedReason,
+                error instanceof Error ? error.message : 'unknown_error'
+              ]
+            );
+            break;
+          }
+        }
+
+        const finalStatus: InstallUpdateResponse['status'] =
+          failedReason === null ? 'update_succeeded' : 'update_failed';
+
+        await tx.query(
+          `
+            INSERT INTO install_apply_attempts (
+              plan_internal_id,
+              attempt_number,
+              status,
+              reason_code,
+              details,
+              started_at,
+              completed_at
+            )
+            VALUES (
+              $1::uuid,
+              $2,
+              $3,
+              $4,
+              $5::jsonb,
+              $6::timestamptz,
+              $6::timestamptz
+            )
+          `,
+          [
+            plan.internal_id,
+            attemptNumber,
+            finalStatus === 'update_succeeded' ? 'succeeded' : 'failed',
+            failedReason,
+            JSON.stringify({
+              operation: 'update',
+              target_version: targetVersion ?? null,
+              correlation_id: effectiveCorrelationId
+            }),
+            nowIso
+          ]
+        );
+
+        await tx.query(
+          `
+            UPDATE install_plans
+            SET
+              status = $2,
+              reason_code = $3,
+              updated_at = $4::timestamptz
+            WHERE id = $1::uuid
+          `,
+          [
+            plan.internal_id,
+            finalStatus === 'update_succeeded' ? 'apply_succeeded' : 'apply_failed',
+            failedReason,
+            nowIso
+          ]
+        );
+
+        await appendAuditRow(tx, plan.internal_id, {
+          stage: 'apply',
+          event_type:
+            finalStatus === 'update_succeeded'
+              ? 'install.update.succeeded'
+              : 'install.update.failed',
+          status: finalStatus,
+          reason_code: failedReason,
+          correlation_id: effectiveCorrelationId,
+          details: {
+            operation: 'update',
+            target_version: targetVersion ?? null,
+            attempt_number: attemptNumber
+          },
+          created_at: nowIso
+        });
+      });
+
+      const finalStatus: InstallUpdateResponse['status'] =
+        failedReason === null ? 'update_succeeded' : 'update_failed';
+
+      if (dependencies.outboxPublisher) {
+        await dependencies.outboxPublisher.publish({
+          event_type:
+            finalStatus === 'update_succeeded'
+              ? 'install.update.succeeded'
+              : 'install.update.failed',
+          dedupe_key: `${planId}:update:${attemptNumber}:${finalStatus}`,
+          payload: {
+            plan_id: planId,
+            attempt_number: attemptNumber,
+            reason_code: failedReason,
+            correlation_id: effectiveCorrelationId,
+            target_version: targetVersion ?? null
+          },
+          occurred_at: nowIso
+        });
+      }
+
+      const response: InstallUpdateResponse = {
+        status: finalStatus,
+        replayed: false,
+        plan_id: planId,
+        attempt_number: attemptNumber,
+        reason_code: failedReason,
+        target_version: targetVersion ?? null
+      };
+
+      if (idempotencyKey) {
+        await dependencies.idempotency.put({
+          scope: idempotencyScope,
+          idempotency_key: idempotencyKey,
+          request_hash: requestHash,
+          response_code: 200,
+          response_body: response,
+          stored_at: nowIso
+        });
+      }
+
+      await safeLog('install.apply.completed', nowIso, {
+        operation: 'update',
+        correlation_id: effectiveCorrelationId,
+        plan_id: planId,
+        attempt_number: attemptNumber,
+        status: finalStatus,
+        reason_code: failedReason,
+        target_version: targetVersion ?? null
+      });
+
+      return response;
+    },
+
+    async removePlan(
+      planId: string,
+      idempotencyKey: string | null,
+      correlationId: string | null
+    ): Promise<InstallRemoveResponse> {
+      const nowIso = now().toISOString();
+      const idempotencyScope = `POST:/v1/install/plans/${planId}/remove`;
+      const requestHash = buildLifecycleRequestHash({ plan_id: planId });
+
+      if (idempotencyKey) {
+        const existing = await dependencies.idempotency.get(idempotencyScope, idempotencyKey);
+        if (existing) {
+          if (existing.request_hash !== requestHash) {
+            throw new Error('idempotency_conflict');
+          }
+
+          return {
+            ...(existing.response_body as InstallRemoveResponse),
+            replayed: true
+          };
+        }
+      }
+
+      const plan = await loadPlan(dependencies.db, planId);
+      if (!plan) {
+        throw new Error('plan_not_found');
+      }
+
+      const allowedStatuses: InstallPlanStatus[] = [
+        'apply_succeeded',
+        'verify_succeeded',
+        'verify_failed',
+        'rollback_succeeded'
+      ];
+      if (!allowedStatuses.includes(plan.status)) {
+        throw new Error('remove_invalid_plan_state');
+      }
+
+      const requiredProfileReferences = await resolveRequiredProfileReferenceCount(
+        dependencies.db,
+        plan.package_id
+      );
+      if (requiredProfileReferences > 0) {
+        throw new Error('remove_dependency_blocked');
+      }
+
+      const attemptNumber = await resolveAttemptNumber(
+        dependencies.db,
+        'install_apply_attempts',
+        plan.internal_id
+      );
+      const effectiveCorrelationId =
+        correlationId ?? plan.correlation_id ?? plan.plan_id;
+
+      const scopeMap = createScopeMap(await dependencies.copilotAdapter.discover_scopes());
+      let failedReason: string | null = null;
+
+      await runInTransaction(dependencies.db, async (tx) => {
+        for (const action of plan.actions) {
+          if (action.action_type === 'skip_scope') {
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'skipped',
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso]
+            );
+            continue;
+          }
+
+          const scope = scopeMap[action.scope];
+          if (!scope) {
+            failedReason = 'scope_not_found';
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'failed',
+                  reason_code = $4,
+                  last_error = $4,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso, failedReason]
+            );
+            break;
+          }
+
+          try {
+            await dependencies.copilotAdapter.remove_entry(scope, plan.package_id);
+
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'applied',
+                  reason_code = 'remove_ok',
+                  last_error = NULL,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso]
+            );
+          } catch (error) {
+            failedReason =
+              error instanceof Error && error.name === 'CopilotFilesystemAdapterError'
+                ? `adapter_${error.message}`
+                : 'adapter_remove_failed';
+
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'failed',
+                  reason_code = $4,
+                  last_error = $5,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [
+                plan.internal_id,
+                action.action_order,
+                nowIso,
+                failedReason,
+                error instanceof Error ? error.message : 'unknown_error'
+              ]
+            );
+            break;
+          }
+        }
+
+        const finalStatus: InstallRemoveResponse['status'] =
+          failedReason === null ? 'remove_succeeded' : 'remove_failed';
+
+        await tx.query(
+          `
+            INSERT INTO install_apply_attempts (
+              plan_internal_id,
+              attempt_number,
+              status,
+              reason_code,
+              details,
+              started_at,
+              completed_at
+            )
+            VALUES (
+              $1::uuid,
+              $2,
+              $3,
+              $4,
+              $5::jsonb,
+              $6::timestamptz,
+              $6::timestamptz
+            )
+          `,
+          [
+            plan.internal_id,
+            attemptNumber,
+            finalStatus === 'remove_succeeded' ? 'succeeded' : 'failed',
+            failedReason,
+            JSON.stringify({
+              operation: 'remove',
+              correlation_id: effectiveCorrelationId,
+              required_profile_references: requiredProfileReferences
+            }),
+            nowIso
+          ]
+        );
+
+        await tx.query(
+          `
+            UPDATE install_plans
+            SET
+              status = $2,
+              reason_code = $3,
+              updated_at = $4::timestamptz
+            WHERE id = $1::uuid
+          `,
+          [plan.internal_id, finalStatus, failedReason, nowIso]
+        );
+
+        await appendAuditRow(tx, plan.internal_id, {
+          stage: 'remove',
+          event_type:
+            finalStatus === 'remove_succeeded'
+              ? 'install.remove.succeeded'
+              : 'install.remove.failed',
+          status: finalStatus,
+          reason_code: failedReason,
+          correlation_id: effectiveCorrelationId,
+          details: {
+            operation: 'remove',
+            attempt_number: attemptNumber,
+            required_profile_references: requiredProfileReferences
+          },
+          created_at: nowIso
+        });
+      });
+
+      const finalStatus: InstallRemoveResponse['status'] =
+        failedReason === null ? 'remove_succeeded' : 'remove_failed';
+
+      if (dependencies.outboxPublisher) {
+        await dependencies.outboxPublisher.publish({
+          event_type:
+            finalStatus === 'remove_succeeded'
+              ? 'install.remove.succeeded'
+              : 'install.remove.failed',
+          dedupe_key: `${planId}:remove:${attemptNumber}:${finalStatus}`,
+          payload: {
+            plan_id: planId,
+            attempt_number: attemptNumber,
+            reason_code: failedReason,
+            correlation_id: effectiveCorrelationId
+          },
+          occurred_at: nowIso
+        });
+      }
+
+      const response: InstallRemoveResponse = {
+        status: finalStatus,
+        replayed: false,
+        plan_id: planId,
+        attempt_number: attemptNumber,
+        reason_code: failedReason
+      };
+
+      if (idempotencyKey) {
+        await dependencies.idempotency.put({
+          scope: idempotencyScope,
+          idempotency_key: idempotencyKey,
+          request_hash: requestHash,
+          response_code: 200,
+          response_body: response,
+          stored_at: nowIso
+        });
+      }
+
+      await safeLog('install.apply.completed', nowIso, {
+        operation: 'remove',
+        correlation_id: effectiveCorrelationId,
+        plan_id: planId,
+        attempt_number: attemptNumber,
+        status: finalStatus,
+        reason_code: failedReason
+      });
+
+      return response;
+    },
+
+    async rollbackPlan(
+      planId: string,
+      idempotencyKey: string | null,
+      correlationId: string | null
+    ): Promise<InstallRollbackResponse> {
+      const nowIso = now().toISOString();
+      const idempotencyScope = `POST:/v1/install/plans/${planId}/rollback`;
+      const requestHash = buildLifecycleRequestHash({ plan_id: planId });
+
+      if (idempotencyKey) {
+        const existing = await dependencies.idempotency.get(idempotencyScope, idempotencyKey);
+        if (existing) {
+          if (existing.request_hash !== requestHash) {
+            throw new Error('idempotency_conflict');
+          }
+
+          return {
+            ...(existing.response_body as InstallRollbackResponse),
+            replayed: true
+          };
+        }
+      }
+
+      const plan = await loadPlan(dependencies.db, planId);
+      if (!plan) {
+        throw new Error('plan_not_found');
+      }
+
+      const allowedStatuses: InstallPlanStatus[] = [
+        'apply_failed',
+        'remove_failed',
+        'rollback_failed'
+      ];
+      if (!allowedStatuses.includes(plan.status)) {
+        throw new Error('rollback_invalid_plan_state');
+      }
+
+      const sourceAttempt = await resolveLatestApplyAttempt(dependencies.db, plan.internal_id);
+      if (!sourceAttempt || sourceAttempt.status !== 'failed') {
+        throw new Error('rollback_source_attempt_missing');
+      }
+
+      const sourceOperationRaw = sourceAttempt.details.operation;
+      const sourceOperation: InstallRollbackResponse['source_operation'] =
+        sourceOperationRaw === 'update' ||
+        sourceOperationRaw === 'remove' ||
+        sourceOperationRaw === 'rollback'
+          ? sourceOperationRaw
+          : 'apply';
+
+      const rollbackMode: InstallRollbackResponse['rollback_mode'] =
+        sourceOperation === 'remove'
+          ? 'restore_removed_entries'
+          : 'cleanup_partial_install';
+
+      const attemptNumber = await resolveAttemptNumber(
+        dependencies.db,
+        'install_apply_attempts',
+        plan.internal_id
+      );
+      const effectiveCorrelationId =
+        correlationId ?? plan.correlation_id ?? plan.plan_id;
+
+      const scopeMap = createScopeMap(await dependencies.copilotAdapter.discover_scopes());
+      const entry: CopilotServerEntry = {
+        package_id: plan.package_id,
+        package_slug: plan.package_slug,
+        mode: 'local',
+        transport: 'stdio',
+        trust_state: plan.runtime_context.trust_state
+      };
+
+      let failedReason: string | null = null;
+
+      await runInTransaction(dependencies.db, async (tx) => {
+        for (const action of plan.actions) {
+          if (action.action_type === 'skip_scope') {
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'skipped',
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso]
+            );
+            continue;
+          }
+
+          const scope = scopeMap[action.scope];
+          if (!scope) {
+            failedReason = 'scope_not_found';
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'failed',
+                  reason_code = $4,
+                  last_error = $4,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [plan.internal_id, action.action_order, nowIso, failedReason]
+            );
+            break;
+          }
+
+          try {
+            if (rollbackMode === 'restore_removed_entries') {
+              await dependencies.copilotAdapter.write_entry(scope, entry);
+
+              if (dependencies.runtimeVerifier.writeScopeSidecarGuarded) {
+                await dependencies.runtimeVerifier.writeScopeSidecarGuarded({
+                  scope_hash: sha256Hex(`${plan.package_id}:${scope.scope}:${scope.scope_path}`),
+                  scope_daemon_owned: scope.daemon_owned,
+                  record: {
+                    package_id: plan.package_id,
+                    package_slug: plan.package_slug,
+                    plan_id: plan.plan_id,
+                    applied_at: nowIso,
+                    scope: scope.scope,
+                    scope_path: scope.scope_path
+                  }
+                });
+              }
+            } else {
+              await dependencies.copilotAdapter.remove_entry(scope, plan.package_id);
+            }
+
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'applied',
+                  reason_code = $4,
+                  last_error = NULL,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [
+                plan.internal_id,
+                action.action_order,
+                nowIso,
+                rollbackMode === 'restore_removed_entries'
+                  ? 'rollback_restore_ok'
+                  : 'rollback_cleanup_ok'
+              ]
+            );
+          } catch (error) {
+            failedReason =
+              error instanceof Error && error.name === 'CopilotFilesystemAdapterError'
+                ? `adapter_${error.message}`
+                : rollbackMode === 'restore_removed_entries'
+                  ? 'adapter_write_failed'
+                  : 'adapter_remove_failed';
+
+            await tx.query(
+              `
+                UPDATE install_plan_actions
+                SET
+                  status = 'failed',
+                  reason_code = $4,
+                  last_error = $5,
+                  updated_at = $3::timestamptz
+                WHERE plan_internal_id = $1::uuid AND action_order = $2
+              `,
+              [
+                plan.internal_id,
+                action.action_order,
+                nowIso,
+                failedReason,
+                error instanceof Error ? error.message : 'unknown_error'
+              ]
+            );
+            break;
+          }
+        }
+
+        const finalStatus: InstallRollbackResponse['status'] =
+          failedReason === null ? 'rollback_succeeded' : 'rollback_failed';
+
+        await tx.query(
+          `
+            INSERT INTO install_apply_attempts (
+              plan_internal_id,
+              attempt_number,
+              status,
+              reason_code,
+              details,
+              started_at,
+              completed_at
+            )
+            VALUES (
+              $1::uuid,
+              $2,
+              $3,
+              $4,
+              $5::jsonb,
+              $6::timestamptz,
+              $6::timestamptz
+            )
+          `,
+          [
+            plan.internal_id,
+            attemptNumber,
+            finalStatus === 'rollback_succeeded' ? 'succeeded' : 'failed',
+            failedReason,
+            JSON.stringify({
+              operation: 'rollback',
+              rollback_mode: rollbackMode,
+              source_operation: sourceOperation,
+              source_attempt_number: sourceAttempt.attempt_number,
+              correlation_id: effectiveCorrelationId
+            }),
+            nowIso
+          ]
+        );
+
+        await tx.query(
+          `
+            UPDATE install_plans
+            SET
+              status = $2,
+              reason_code = $3,
+              updated_at = $4::timestamptz
+            WHERE id = $1::uuid
+          `,
+          [plan.internal_id, finalStatus, failedReason, nowIso]
+        );
+
+        await appendAuditRow(tx, plan.internal_id, {
+          stage: 'rollback',
+          event_type:
+            finalStatus === 'rollback_succeeded'
+              ? 'install.rollback.succeeded'
+              : 'install.rollback.failed',
+          status: finalStatus,
+          reason_code: failedReason,
+          correlation_id: effectiveCorrelationId,
+          details: {
+            operation: 'rollback',
+            attempt_number: attemptNumber,
+            rollback_mode: rollbackMode,
+            source_operation: sourceOperation,
+            source_attempt_number: sourceAttempt.attempt_number
+          },
+          created_at: nowIso
+        });
+      });
+
+      const finalStatus: InstallRollbackResponse['status'] =
+        failedReason === null ? 'rollback_succeeded' : 'rollback_failed';
+
+      if (dependencies.outboxPublisher) {
+        await dependencies.outboxPublisher.publish({
+          event_type:
+            finalStatus === 'rollback_succeeded'
+              ? 'install.rollback.succeeded'
+              : 'install.rollback.failed',
+          dedupe_key: `${planId}:rollback:${attemptNumber}:${finalStatus}`,
+          payload: {
+            plan_id: planId,
+            attempt_number: attemptNumber,
+            reason_code: failedReason,
+            correlation_id: effectiveCorrelationId,
+            rollback_mode: rollbackMode,
+            source_operation: sourceOperation,
+            source_attempt_number: sourceAttempt.attempt_number
+          },
+          occurred_at: nowIso
+        });
+      }
+
+      const response: InstallRollbackResponse = {
+        status: finalStatus,
+        replayed: false,
+        plan_id: planId,
+        attempt_number: attemptNumber,
+        reason_code: failedReason,
+        rollback_mode: rollbackMode,
+        source_operation: sourceOperation
+      };
+
+      if (idempotencyKey) {
+        await dependencies.idempotency.put({
+          scope: idempotencyScope,
+          idempotency_key: idempotencyKey,
+          request_hash: requestHash,
+          response_code: 200,
+          response_body: response,
+          stored_at: nowIso
+        });
+      }
+
+      await safeLog('install.apply.completed', nowIso, {
+        operation: 'rollback',
+        correlation_id: effectiveCorrelationId,
+        plan_id: planId,
+        attempt_number: attemptNumber,
+        status: finalStatus,
+        reason_code: failedReason,
+        rollback_mode: rollbackMode,
+        source_operation: sourceOperation,
+        source_attempt_number: sourceAttempt.attempt_number
       });
 
       return response;

@@ -199,6 +199,65 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function asStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const output: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      return null;
+    }
+
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) {
+      return null;
+    }
+
+    output.push(trimmed);
+  }
+
+  return output;
+}
+
+function asDependencyEdges(
+  value: unknown
+): import('@forge/shared-contracts').DependencyEdge[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const output: import('@forge/shared-contracts').DependencyEdge[] = [];
+  for (const rawEdge of value) {
+    const edge = asObject(rawEdge);
+    if (!edge) {
+      return null;
+    }
+
+    if (
+      typeof edge.from_package_id !== 'string' ||
+      edge.from_package_id.trim().length === 0 ||
+      typeof edge.to_package_id !== 'string' ||
+      edge.to_package_id.trim().length === 0 ||
+      typeof edge.constraint !== 'string' ||
+      edge.constraint.trim().length === 0 ||
+      typeof edge.required !== 'boolean'
+    ) {
+      return null;
+    }
+
+    output.push({
+      from_package_id: edge.from_package_id.trim(),
+      to_package_id: edge.to_package_id.trim(),
+      constraint: edge.constraint.trim(),
+      required: edge.required
+    });
+  }
+
+  return output;
+}
+
 function resolveIdempotencyKey(headers: Record<string, string | undefined>): string | null {
   const key = headers['idempotency-key'] ?? headers['x-idempotency-key'] ?? null;
   if (!key) {
@@ -360,6 +419,32 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           });
         }
 
+        let dependencyEdges: import('@forge/shared-contracts').DependencyEdge[] | undefined;
+        if (body.dependency_edges !== undefined) {
+          const parsedDependencyEdges = asDependencyEdges(body.dependency_edges);
+          if (parsedDependencyEdges === null) {
+            return jsonResponse(422, {
+              status: 'invalid_request',
+              reason: 'dependency_edges_invalid'
+            });
+          }
+
+          dependencyEdges = parsedDependencyEdges;
+        }
+
+        let knownPackageIds: string[] | undefined;
+        if (body.known_package_ids !== undefined) {
+          const parsedKnownPackageIds = asStringArray(body.known_package_ids);
+          if (parsedKnownPackageIds === null) {
+            return jsonResponse(422, {
+              status: 'invalid_request',
+              reason: 'known_package_ids_invalid'
+            });
+          }
+
+          knownPackageIds = parsedKnownPackageIds;
+        }
+
         try {
           const correlationId = resolveCorrelationId(request.headers);
           const response = await dependencies.installLifecycle.createPlan(
@@ -400,6 +485,12 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
                       | 'user_revoked'
                       | 'none'
                   }
+                : {}),
+              ...(dependencyEdges !== undefined
+                ? { dependency_edges: dependencyEdges }
+                : {}),
+              ...(knownPackageIds !== undefined
+                ? { known_package_ids: knownPackageIds }
                 : {})
             },
             idempotencyKey
@@ -420,6 +511,13 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
             return jsonResponse(404, {
               status: 'not_found',
               reason: 'package_not_found'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('dependency_resolution_failed:')) {
+            return jsonResponse(422, {
+              status: 'dependency_resolution_failed',
+              reason: error.message
             });
           }
 
@@ -495,6 +593,205 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
             return jsonResponse(404, {
               status: 'not_found',
               reason: 'plan_not_found'
+            });
+          }
+
+          throw error;
+        }
+      }
+
+      if (
+        request.method === 'POST' &&
+        /^\/v1\/install\/plans\/[^/]+\/update$/i.test(path)
+      ) {
+        if (!dependencies.installLifecycle) {
+          return jsonResponse(503, {
+            status: 'not_ready',
+            reason: 'install_lifecycle_unavailable'
+          });
+        }
+
+        const planId = path.split('/')[4];
+        if (!planId) {
+          return jsonResponse(400, {
+            status: 'invalid_request',
+            reason: 'missing_plan_id'
+          });
+        }
+
+        const body = request.body === null ? null : asObject(request.body);
+        if (request.body !== null && body === null) {
+          return jsonResponse(422, {
+            status: 'invalid_request',
+            reason: 'body_object_required'
+          });
+        }
+
+        const targetVersion = body?.target_version;
+        if (
+          targetVersion !== undefined &&
+          (typeof targetVersion !== 'string' || targetVersion.trim().length === 0)
+        ) {
+          return jsonResponse(422, {
+            status: 'invalid_request',
+            reason: 'target_version_invalid'
+          });
+        }
+
+        try {
+          const response = await dependencies.installLifecycle.updatePlan(
+            planId,
+            resolveIdempotencyKey(request.headers),
+            resolveCorrelationId(request.headers),
+            typeof targetVersion === 'string' ? targetVersion.trim() : null
+          );
+
+          return jsonResponse(200, response, {
+            'x-idempotent-replay': response.replayed ? 'true' : 'false'
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('idempotency_conflict')) {
+            return jsonResponse(409, {
+              status: 'conflict',
+              reason: 'idempotency_key_reused_with_different_payload'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('plan_not_found')) {
+            return jsonResponse(404, {
+              status: 'not_found',
+              reason: 'plan_not_found'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('update_invalid_plan_state')) {
+            return jsonResponse(422, {
+              status: 'invalid_request',
+              reason: 'update_invalid_plan_state'
+            });
+          }
+
+          throw error;
+        }
+      }
+
+      if (
+        request.method === 'POST' &&
+        /^\/v1\/install\/plans\/[^/]+\/(?:remove|uninstall)$/i.test(path)
+      ) {
+        if (!dependencies.installLifecycle) {
+          return jsonResponse(503, {
+            status: 'not_ready',
+            reason: 'install_lifecycle_unavailable'
+          });
+        }
+
+        const planId = path.split('/')[4];
+        if (!planId) {
+          return jsonResponse(400, {
+            status: 'invalid_request',
+            reason: 'missing_plan_id'
+          });
+        }
+
+        try {
+          const response = await dependencies.installLifecycle.removePlan(
+            planId,
+            resolveIdempotencyKey(request.headers),
+            resolveCorrelationId(request.headers)
+          );
+
+          return jsonResponse(200, response, {
+            'x-idempotent-replay': response.replayed ? 'true' : 'false'
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('idempotency_conflict')) {
+            return jsonResponse(409, {
+              status: 'conflict',
+              reason: 'idempotency_key_reused_with_different_payload'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('plan_not_found')) {
+            return jsonResponse(404, {
+              status: 'not_found',
+              reason: 'plan_not_found'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('remove_invalid_plan_state')) {
+            return jsonResponse(422, {
+              status: 'invalid_request',
+              reason: 'remove_invalid_plan_state'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('remove_dependency_blocked')) {
+            return jsonResponse(409, {
+              status: 'conflict',
+              reason: 'remove_dependency_blocked'
+            });
+          }
+
+          throw error;
+        }
+      }
+
+      if (
+        request.method === 'POST' &&
+        /^\/v1\/install\/plans\/[^/]+\/rollback$/i.test(path)
+      ) {
+        if (!dependencies.installLifecycle) {
+          return jsonResponse(503, {
+            status: 'not_ready',
+            reason: 'install_lifecycle_unavailable'
+          });
+        }
+
+        const planId = path.split('/')[4];
+        if (!planId) {
+          return jsonResponse(400, {
+            status: 'invalid_request',
+            reason: 'missing_plan_id'
+          });
+        }
+
+        try {
+          const response = await dependencies.installLifecycle.rollbackPlan(
+            planId,
+            resolveIdempotencyKey(request.headers),
+            resolveCorrelationId(request.headers)
+          );
+
+          return jsonResponse(200, response, {
+            'x-idempotent-replay': response.replayed ? 'true' : 'false'
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('idempotency_conflict')) {
+            return jsonResponse(409, {
+              status: 'conflict',
+              reason: 'idempotency_key_reused_with_different_payload'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('plan_not_found')) {
+            return jsonResponse(404, {
+              status: 'not_found',
+              reason: 'plan_not_found'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('rollback_invalid_plan_state')) {
+            return jsonResponse(422, {
+              status: 'invalid_request',
+              reason: 'rollback_invalid_plan_state'
+            });
+          }
+
+          if (error instanceof Error && error.message.includes('rollback_source_attempt_missing')) {
+            return jsonResponse(409, {
+              status: 'conflict',
+              reason: 'rollback_source_attempt_missing'
             });
           }
 

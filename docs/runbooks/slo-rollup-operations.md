@@ -37,8 +37,8 @@ The SLO rollup aggregates operational health metrics into time-windowed snapshot
 The script emits structured JSON logs to stdout:
 
 - `slo_rollup.run_started` — emitted at the beginning of a rollup run with `run_id`, `mode`, `window_from`, `window_to`.
-- `slo_rollup.run_completed` — emitted on success with `run_id`, `metrics_computed`, `snapshots_written`.
-- `slo_rollup.run_failed` — emitted on failure with `run_id`, `error`.
+- `slo_rollup.run_completed` — emitted on success with `run_id`, `mode`, `window_from`, `window_to`, `metric_count`, `persisted`, `metrics`.
+- `slo_rollup.run_failed` — emitted on failure with `run_id`, `mode`, `window_from`, `window_to`, `failure_class`, `error_message`.
 
 ## Environment variables
 
@@ -69,19 +69,19 @@ The script emits structured JSON logs to stdout:
 
 2. Inspect snapshots for a run:
    ```sql
-   SELECT run_id, metric_family, metric_value, numerator, denominator, window_from, window_to
+   SELECT run_id, metric_key, ratio, numerator, denominator, sample_size, window_from, window_to
    FROM operational_slo_snapshots
    WHERE run_id = '<run_id>'
-   ORDER BY metric_family;
+   ORDER BY metric_key;
    ```
 
 3. Aggregate snapshot health across recent windows:
    ```sql
-   SELECT metric_family, AVG(metric_value) AS avg_value, MIN(metric_value) AS min_value, COUNT(*) AS snapshot_count
+   SELECT metric_key, AVG(ratio) AS avg_ratio, MIN(ratio) AS min_ratio, COUNT(*) AS snapshot_count
    FROM operational_slo_snapshots
    WHERE window_from >= NOW() - INTERVAL '7 days'
-   GROUP BY metric_family
-   ORDER BY metric_family;
+   GROUP BY metric_key
+   ORDER BY metric_key;
    ```
 
 ## Validation checks

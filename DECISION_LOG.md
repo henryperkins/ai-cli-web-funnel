@@ -239,3 +239,45 @@ This log captures implementation-time decisions taken while AQ/MQ items are stil
 - Decision: implement operational SLO rollup service with 7 metric families (outbox dead-letter rate, retrieval semantic fallback rate, install apply/verify success rate, lifecycle replay ratio, profile run success rate, governance recompute dispatch rate), additive migration 013, hermetic docker-compose local stack (Postgres 16 + Qdrant), and governance drift checker script.
 - Rationale: closes observability and operator-readiness gaps while preserving existing replay/idempotency invariants and governance status boundaries.
 - Related: AQ-054, AQ-056, MQ-033, MQ-038.
+
+## DLOG-0035 (2026-02-28)
+
+- Scope: Wave 9 closure consistency for Step 10 CI expansion.
+- Decision: defer profile-specific e2e scenario and DB-backed ops smoke GitHub workflow for this wave; keep them as explicit follow-up items while retaining required CI baseline + integration-db docker gates.
+- Rationale: shipped behavior already has direct coverage (unit + contract + integration-db + existing e2e-local), while ops smoke automation requires additional CI runtime/secret posture work not scoped for this closure pass.
+- Related: AQ-050, DR-018, MQ-038.
+
+## DLOG-0036 (2026-02-28)
+
+- Scope: E9-S1 profile-specific e2e scenario implementation.
+- Decision: implement `tests/e2e/profile-lifecycle-local.e2e.test.ts` covering create/get/list/export/import/install(plan_only)/install(apply_verify)/optional-skip flows using in-memory adapters.
+- Rationale: closes DLOG-0035 deferral for profile e2e; runs as part of `npm run test:e2e-local` without DB dependency.
+- Related: AQ-050, MQ-038.
+
+## DLOG-0037 (2026-02-28)
+
+- Scope: E9-S2 ops smoke workflow implementation.
+- Decision: add `.github/workflows/forge-ops-smoke.yml` as non-blocking `workflow_dispatch` + nightly cron workflow running retrieval-sync, outbox, dead-letter, and SLO rollup in dry-run mode against ephemeral Postgres service container.
+- Rationale: closes DLOG-0035 deferral for ops smoke automation; uses `continue-on-error` + artifact uploads for triage without blocking merges.
+- Related: AQ-050, DR-018, MQ-038.
+
+## DLOG-0038 (2026-02-28)
+
+- Scope: E2-S1 GitHub source connector for catalog ingest.
+- Decision: implement `packages/catalog/src/sources/github-connector.ts` with pure normalization function (`normalizeGitHubRepos`), fetch layer (`fetchGitHubRepos`), and entry point (`runGitHubConnector`). Wire into `scripts/run-catalog-ingest.mjs` via `--source github` flag. Export as `@forge/catalog/sources/github-connector`.
+- Rationale: preserves hexagonal architecture (pure normalization separated from I/O fetch), deterministic replay via fixture-based testing, and idempotent ingest pipeline integration. Skips archived/forked repos, normalizes topics, extracts license/release metadata.
+- Related: E2-S1, AQ-056.
+
+## DLOG-0039 (2026-02-28)
+
+- Scope: E3-S1 dependency graph expansion and transitive resolution.
+- Decision: add shared dependency graph contracts/resolver (`packages/shared-contracts/src/dependency-graph.ts`) with deterministic topological ordering, cycle/missing/duplicate conflict taxonomy; integrate dependency resolution into install plan creation with optional request inputs (`dependency_edges`, `known_package_ids`) and response projection (`dependency_resolution`).
+- Rationale: ensures dependency expansion is deterministic and machine-readable, while preserving existing idempotency/replay semantics and explicit 422 conflict mapping (`dependency_resolution_failed:`).
+- Related: E3-S1, AQ-050, MQ-038.
+
+## DLOG-0040 (2026-02-28)
+
+- Scope: E5-S1 update lifecycle prototype.
+- Decision: implement prototype update path via `updatePlan` service and `POST /v1/install/plans/:plan_id/update` endpoint; reuse existing idempotency + audit model and persist update attempts through `install_apply_attempts` with `details.operation = "update"`.
+- Rationale: provides replay-safe update capability without introducing destructive schema changes; keeps prototype constraints explicit for follow-on remove/rollback stories (`E5-S2`, `E5-S3`).
+- Related: E5-S1, DR-011, DR-017.

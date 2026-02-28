@@ -1,0 +1,105 @@
+name: Forge Ops Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 04:00 UTC
+    - cron: '0 4 * * *'
+
+jobs:
+  ops-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: forge
+          POSTGRES_PASSWORD: forge_local
+          POSTGRES_DB: forge_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      FORGE_DATABASE_URL: postgresql://forge:forge_local@localhost:5432/forge_dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for migration in infra/postgres/migrations/*.sql; do
+            echo "Applying $(basename "$migration")..."
+            PGPASSWORD=forge_local psql \
+              -v ON_ERROR_STOP=1 \
+              -h localhost \
+              -U forge \
+              -d forge_dev \
+              -f "$migration" \
+              --quiet
+          done
+
+      - name: Build workspace packages
+        run: npm run build --if-present
+
+      - name: "Smoke: retrieval-sync dry-run"
+        id: retrieval-sync
+        continue-on-error: true
+        run: npm run run:retrieval-sync -- --mode dry-run --limit 25 2>&1 | tee retrieval-sync.log
+
+      - name: "Smoke: outbox dry-run"
+        id: outbox
+        continue-on-error: true
+        run: npm run run:outbox -- --mode dry-run --limit 25 2>&1 | tee outbox.log
+
+      - name: "Smoke: dead-letter list"
+        id: dead-letter
+        continue-on-error: true
+        run: npm run run:outbox-dead-letter -- --action list --limit 25 2>&1 | tee dead-letter.log
+
+      - name: "Smoke: SLO rollup dry-run"
+        id: slo-rollup
+        continue-on-error: true
+        run: |
+          FROM=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+          TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          npm run run:slo-rollup -- --mode dry-run --from "$FROM" --to "$TO" --limit 100 2>&1 | tee slo-rollup.log
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops-smoke-logs
+          path: |
+            retrieval-sync.log
+            outbox.log
+            dead-letter.log
+            slo-rollup.log
+          retention-days: 14
+
+      - name: Summarize results
+        if: always()
+        run: |
+          echo "## Ops Smoke Summary"
+          echo "| Command | Status |"
+          echo "|---------|--------|"
+          echo "| retrieval-sync | ${{ steps.retrieval-sync.outcome }} |"
+          echo "| outbox | ${{ steps.outbox.outcome }} |"
+          echo "| dead-letter | ${{ steps.dead-letter.outcome }} |"
+          echo "| slo-rollup | ${{ steps.slo-rollup.outcome }} |"

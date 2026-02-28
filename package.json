@@ -24,7 +24,7 @@
     "run:slo-rollup": "node scripts/run-slo-rollup.mjs",
     "run:control-plane": "node apps/control-plane/dist/server-main.js",
     "verify:migrations:dr018": "node scripts/verify-dr018-migration.mjs",
-    "check:governance": "node scripts/check-governance-status-drift.mjs",
+    "check:governance": "node scripts/verify-governance-drift.mjs",
     "check": "npm run check:governance && npm run typecheck && npm run test"
   },
   "dependencies": {

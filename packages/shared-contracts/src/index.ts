@@ -1,4 +1,5 @@
 export * from './constants.js';
+export * from './dependency-graph.js';
 export * from './event-types.js';
 export * from './event-validation.js';
 export * from './feature-flags.js';

@@ -56,6 +56,7 @@ function buildLifecycleHarness() {
   const planCreateIdempotency = new Map<string, { requestHash: string; replayed: boolean }>();
   const applyIdempotency = new Map<string, true>();
   const verifyIdempotency = new Map<string, true>();
+  const updateIdempotency = new Map<string, true>();
   const planState = {
     status: 'planned' as
       | 'planned'
@@ -65,7 +66,8 @@ function buildLifecycleHarness() {
       | 'verify_failed',
     correlation_id: 'corr-wave7-e2e',
     apply_attempt: 0,
-    verify_attempt: 0
+    verify_attempt: 0,
+    update_attempt: 0
   };
 
   function createPlanRequestHash(input: {
@@ -238,6 +240,44 @@ function buildLifecycleHarness() {
         plan_id: planId,
         attempt_number: planState.apply_attempt,
         reason_code: null
+      };
+    },
+
+    async updatePlan(
+      requestedPlanId: string,
+      idempotencyKey: string | null,
+      _correlationId: string | null,
+      targetVersion?: string | null
+    ) {
+      if (requestedPlanId !== planId) {
+        throw new Error('plan_not_found');
+      }
+      if (!idempotencyKey) {
+        throw new Error('idempotency_conflict');
+      }
+
+      if (updateIdempotency.has(idempotencyKey)) {
+        return {
+          status: 'update_succeeded' as const,
+          replayed: true,
+          plan_id: planId,
+          attempt_number: planState.update_attempt,
+          reason_code: null,
+          target_version: targetVersion ?? null
+        };
+      }
+
+      planState.status = 'apply_succeeded';
+      planState.update_attempt += 1;
+      updateIdempotency.set(idempotencyKey, true);
+
+      return {
+        status: 'update_succeeded' as const,
+        replayed: false,
+        plan_id: planId,
+        attempt_number: planState.update_attempt,
+        reason_code: null,
+        target_version: targetVersion ?? null
       };
     },
 
@@ -488,6 +528,22 @@ describe('e2e local: discover -> plan -> install -> verify', () => {
       readiness: true
     });
 
+    const update = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-wave7-001/update',
+      headers: {
+        'idempotency-key': 'update-wave7-idem-1'
+      },
+      body: {
+        target_version: '2.0.0'
+      }
+    });
+    expect(update.statusCode).toBe(200);
+    expect((update.body as { status: string; target_version: string | null })).toMatchObject({
+      status: 'update_succeeded',
+      target_version: '2.0.0'
+    });
+
     const finalPlan = await app.handle({
       method: 'GET',
       path: '/v1/install/plans/plan-wave7-001',
@@ -495,6 +551,6 @@ describe('e2e local: discover -> plan -> install -> verify', () => {
       body: null
     });
     expect(finalPlan.statusCode).toBe(200);
-    expect((finalPlan.body as { status: string }).status).toBe('verify_succeeded');
+    expect((finalPlan.body as { status: string }).status).toBe('apply_succeeded');
   });
 });

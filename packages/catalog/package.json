@@ -13,6 +13,10 @@
     "./postgres-adapters": {
       "types": "./src/postgres-adapters.ts",
       "default": "./dist/postgres-adapters.js"
+    },
+    "./sources/github-connector": {
+      "types": "./src/sources/github-connector.ts",
+      "default": "./dist/sources/github-connector.js"
     }
   },
   "scripts": {

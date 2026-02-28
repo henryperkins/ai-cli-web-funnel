@@ -29,6 +29,9 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: E2E local (profile lifecycle)
+        run: npm run test:e2e-local
+
       - name: Check
         run: npm run check
 

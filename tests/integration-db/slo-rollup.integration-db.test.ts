@@ -145,12 +145,12 @@ describe('integration-db: operational SLO rollup', () => {
   it('counts real outbox rows in window', async () => {
     // Seed some outbox rows in the window
     await pool.query(`
-      INSERT INTO ingestion_outbox (dedupe_key, event_type, payload, status, occurred_at)
+      INSERT INTO ingestion_outbox (dedupe_key, event_type, payload, source_service, status, occurred_at)
       VALUES
-        ('dk-1', 'install.plan.created', '{}', 'dispatched', '2026-02-28T06:00:00Z'),
-        ('dk-2', 'install.apply.succeeded', '{}', 'dead_letter', '2026-02-28T07:00:00Z'),
-        ('dk-3', 'install.verify.failed', '{}', 'failed', '2026-02-28T08:00:00Z'),
-        ('dk-out', 'install.plan.created', '{}', 'dispatched', '2026-02-27T23:00:00Z')
+        ('dk-1', 'install.plan.created', '{}', 'integration-test', 'completed', '2026-02-28T06:00:00Z'),
+        ('dk-2', 'install.apply.succeeded', '{}', 'integration-test', 'dead_letter', '2026-02-28T07:00:00Z'),
+        ('dk-3', 'install.verify.failed', '{}', 'integration-test', 'failed', '2026-02-28T08:00:00Z'),
+        ('dk-out', 'install.plan.created', '{}', 'integration-test', 'completed', '2026-02-27T23:00:00Z')
     `);
 
     const service = createOperationalSloRollupService({ db, now: () => fixedDate });
