@@ -8,7 +8,7 @@ Scope: Profile/bundle orchestration foundations and security event family expans
 Wave 8 was not executed as a formally scoped wave with a numbered step matrix. Instead, profile/bundle foundations were built incrementally during the gap between Wave 7 closure and Wave 9 scope lock. The following capabilities were delivered:
 
 1. Profile/bundle contract types: added `packages/shared-contracts/src/profiles.ts` with `ProfileInstallMode`, `ProfilePackageInput`, `ProfileCreateInput`, `ProfileExportPayload`, and related types.
-2. Profile API routes: `GET/POST /v1/profiles`, `GET /v1/profiles/:id`, `GET /v1/profiles/:id/export`, `POST /v1/profiles/import`, `POST /v1/profiles/:id/install`, `GET /v1/profiles/install-runs/:run_id` in `apps/control-plane/src/profile-routes.ts`.
+2. Profile API routes: `GET/POST /v1/profiles`, `GET /v1/profiles/:id`, `GET|POST /v1/profiles/:id/export` (GET preferred; POST retained for compatibility), `POST /v1/profiles/import`, `POST /v1/profiles/:id/install`, `GET /v1/profiles/install-runs/:run_id` in `apps/control-plane/src/profile-routes.ts`.
 3. Profile API validation: strict input validation (UUID format, bounds checks, enum enforcement, `MAX_PROFILE_PACKAGES=200`) and error taxonomy matching existing API style in `apps/control-plane/src/http-app.ts`.
 4. Profile Postgres adapters: `apps/control-plane/src/profile-postgres-adapters.ts` with install-run persistence, run-plan linkage, and status progression.
 5. Profile install-run orchestration: `profile_install_run_plans` linkage for each created install plan, per-plan status advancement (`planned -> applied -> verified` or `failed/skipped`), aggregate counts derived from persisted per-plan outcomes.

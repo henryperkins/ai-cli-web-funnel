@@ -81,6 +81,20 @@ jobs:
           TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           npm run run:slo-rollup -- --mode dry-run --from "$FROM" --to "$TO" --limit 100 2>&1 | tee slo-rollup.log
 
+      - name: "Smoke: trust-gate evaluate dry-run"
+        id: trust-gates
+        continue-on-error: true
+        run: |
+          FROM=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+          TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from "$FROM" --window-to "$TO" --trigger ops-smoke 2>&1 | tee trust-gates.log
+
+      - name: "Smoke: trust-gate promotion eligibility dry-run"
+        id: trust-gate-promotion
+        continue-on-error: true
+        run: |
+          npm run run:security-promotion -- --mode dry-run --package-id 00000000-0000-0000-0000-000000000001 --reviewer-id ops-smoke --evidence-ref ops-smoke-ticket 2>&1 | tee trust-gate-promotion.log
+
       - name: Upload smoke logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,6 +105,8 @@ jobs:
             outbox.log
             dead-letter.log
             slo-rollup.log
+            trust-gates.log
+            trust-gate-promotion.log
           retention-days: 14
 
       - name: Summarize results
@@ -103,3 +119,5 @@ jobs:
           echo "| outbox | ${{ steps.outbox.outcome }} |"
           echo "| dead-letter | ${{ steps.dead-letter.outcome }} |"
           echo "| slo-rollup | ${{ steps.slo-rollup.outcome }} |"
+          echo "| trust-gates | ${{ steps.trust-gates.outcome }} |"
+          echo "| trust-gate-promotion | ${{ steps.trust-gate-promotion.outcome }} |"

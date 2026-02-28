@@ -298,3 +298,31 @@ This log captures implementation-time decisions taken while AQ/MQ items are stil
   - Step 10 CI expansion is implemented (`forge-ci.yml` profile e2e coverage and non-blocking `forge-ops-smoke.yml`).
 - Rationale: prevents stale documentation from masking real implementation gaps during remaining P0 execution and keeps release/readiness reporting deterministic.
 - Related: E1, E2-S2/S3, E3-S2/S3, E5-S2/S3, E9-S3.
+
+## DLOG-0043 (2026-02-28)
+
+- Scope: Phase 2 `E6-S4` governance closure packaging.
+- Decision: mark `E6` plan tracking as done and bind closure evidence to explicit artifacts (`docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`, phase-2 status index, and release-checklist governance checks), while keeping release-time human sign-offs mandatory.
+- Rationale: closes manual-governance ambiguity for implementation readiness without silently promoting AQ/MQ/DR records to `Approved`.
+- Related: E6-S4, DR-016, DR-017, DR-019, AQ-050, MQ-023, MQ-024, MQ-029.
+
+## DLOG-0044 (2026-02-28)
+
+- Scope: Phase 3 migration ordering reconciliation (Wave 10 trust-gate rollout).
+- Decision: remove duplicate-prefix migration ambiguity by renumbering trust-gate migration to `016_security_appeals_and_trust_gates.sql` and updating migration/runbook/test references to a single deterministic order (`... -> 015_catalog_source_freshness_and_reconciliation.sql -> 016_security_appeals_and_trust_gates.sql`).
+- Rationale: prevents ambiguous migration sequencing across docker/local runners and keeps forward-only migration posture auditable.
+- Related: DR-017, DR-018, DR-019, AQ-049, MQ-034.
+
+## DLOG-0045 (2026-02-28)
+
+- Scope: E9-S4 distribution channels and upgrade policy.
+- Decision: adopt signed release artifact distribution as the enforced channel path (`stable`, `candidate`, `canary`) with channel/version policy validation (`scripts/verify-distribution-policy.mjs`) and generated distribution manifest (`artifacts/distribution-manifest.json`) in release workflow; keep workspace packages private pending separate publication approval.
+- Rationale: delivers executable distribution governance now without widening package-publication scope or weakening signature controls.
+- Related: E9-S4, DR-018, AQ-050, MQ-038.
+
+## DLOG-0046 (2026-02-28)
+
+- Scope: Trust-gate operationalization and E10 execution artifacts.
+- Decision: add operator scripts for trust-gate evaluation and promotion (`run-security-trust-gates`, `run-security-promotion`), integrate trust-gate dry-runs into ops smoke, and publish beta/triage/GA templates plus readiness reporting command (`run-beta-readiness`).
+- Rationale: moves trust-gate and beta/GA readiness from docs-only intent into repeatable, auditable operator workflows with explicit dry-run controls.
+- Related: E10-S1, E10-S2, E10-S3, DR-017, DR-019, MQ-024, MQ-038.

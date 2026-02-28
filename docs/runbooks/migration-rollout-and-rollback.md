@@ -2,6 +2,7 @@
 
 ## Scope
 Operational checklist for applying forward-only schema migrations, including async-boundary tables, reporter freshness guards, and install lifecycle persistence.
+Migration ordering policy: one migration per numeric prefix; trust-gate rollout migration is `016_security_appeals_and_trust_gates.sql` (renumbered from prior duplicate `015` prefix to remove ordering ambiguity).
 
 ## Migrations in scope
 1. `infra/postgres/migrations/005_registry_packages_cutover.sql`
@@ -9,17 +10,19 @@ Operational checklist for applying forward-only schema migrations, including asy
 3. `infra/postgres/migrations/007_async_boundaries_and_projection_snapshots.sql`
 4. `infra/postgres/migrations/008_security_reporter_metrics_freshness_guard.sql`
 5. `infra/postgres/migrations/009_install_lifecycle_foundations.sql`
-6. `infra/postgres/migrations/015_security_appeals_and_trust_gates.sql`
+6. `infra/postgres/migrations/015_catalog_source_freshness_and_reconciliation.sql`
+7. `infra/postgres/migrations/016_security_appeals_and_trust_gates.sql`
 
 ## Preflight
 1. Run contract verification:
    - `npm run verify:migrations:dr018`
+   - `npx vitest run tests/contract/migration-ordering.contract.test.ts`
 2. Run full CI-equivalent checks:
    - `npm run check`
 3. Confirm DB backup/PITR checkpoint exists before applying any migration.
 
 ## Rollout steps
-1. Apply migrations in numeric order (`005 -> 006 -> 007 -> 008 -> 009 -> 015`).
+1. Apply migrations in numeric order (`005 -> 006 -> 007 -> 008 -> 009 -> 015 -> 016`).
 2. After apply, verify required relations:
    - `registry.packages`
    - `public.registry_packages` (compatibility view)
@@ -47,7 +50,8 @@ Operational checklist for applying forward-only schema migrations, including asy
 2. Migration `007` only adds tables/indexes (`CREATE TABLE/INDEX IF NOT EXISTS`) with brief catalog locks.
 3. Migration `008` is function/table additive and metadata-level (no table rewrite expected).
 4. Migration `009` is additive table/index creation only (`CREATE TABLE/INDEX IF NOT EXISTS`) with brief catalog locks and no table rewrites.
-5. Migration `015` is additive enum/table/function/index DDL plus `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` metadata locks on `security_appeals`.
+5. Migration `015` is additive catalog freshness/reconciliation DDL with brief metadata/catalog locks only.
+6. Migration `016` is additive enum/table/function/index DDL plus `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` metadata locks on `security_appeals`.
 
 ## Rollback playbook (forward compensation only)
 1. Do not run destructive down migrations.

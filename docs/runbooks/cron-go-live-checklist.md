@@ -3,6 +3,18 @@
 ## Scope
 Checklist for enabling governance cron classes that mutate security state (score recompute, expiry reconciliation, trust-gate promotion decisions).
 
+## Operator commands
+1. Snapshot trust-gate metrics (read-only):
+   - `npm run run:security-trust-gates -- --mode dry-run --action snapshot --window-from <iso> --window-to <iso>`
+2. Evaluate trust-gate decision in dry-run:
+   - `npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from <iso> --window-to <iso> --trigger manual`
+3. Evaluate trust-gate decision in production:
+   - `npm run run:security-trust-gates -- --mode production --action evaluate --run-id <run-id> --window-from <iso> --window-to <iso> --trigger weekly`
+4. Validate permanent promotion in dry-run:
+   - `npm run run:security-promotion -- --mode dry-run --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id>`
+5. Execute permanent promotion in production:
+   - `npm run run:security-promotion -- --mode production --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id> --evidence-summary <summary>`
+
 ## Preconditions
 1. `npm run verify:migrations:dr018` passes.
 2. `npm run test:integration-contract` passes for migration and job contracts.
@@ -46,3 +58,17 @@ Checklist for enabling governance cron classes that mutate security state (score
 2. Stop production cron execution and continue in dry-run while investigating.
 3. Use forward compensating migration/updates only; do not run destructive down scripts.
 4. Append incident evidence to `DECISION_LOG.md` and the active rollout ticket.
+
+## Symptom -> cause -> fix
+1. `security_trust_gate.run_failed` with DB-url errors
+   - Cause: operator environment missing DB configuration.
+   - Fix: set `FORGE_DATABASE_URL` (or `DATABASE_URL`) and rerun dry-run.
+2. `security_trust_gate.evaluate_completed` reports freeze + `decided_mode=raw-only`
+   - Cause: one or more gates failed (`false_positive`, `appeals_sla`, or backlog).
+   - Fix: review gate evidence in log payload, remediate source metrics, rerun dry-run before production.
+3. `security_promotion.production_completed` returns `status=rejected`
+   - Cause: two-source/reviewer confirmation requirements were not met.
+   - Fix: gather corroborating reports + reviewer confirmation, rerun promotion dry-run.
+4. repeated run with same `run_id` produces unexpected updates
+   - Cause: run-id reuse across different evaluation windows.
+   - Fix: keep same `run_id` only for replay of the same window; generate a new run-id for new windows.

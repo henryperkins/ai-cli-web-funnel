@@ -14,6 +14,8 @@ Run and record results (PASS/FAIL/BLOCKED with exact blocker text):
 6. `npm run run:outbox -- --mode dry-run --limit 25`
 7. `npm run run:outbox-dead-letter -- --action list --limit 25`
 8. `npm run run:slo-rollup -- --mode dry-run --from <iso> --to <iso> --limit 100` (if DB available)
+9. `npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from <iso> --window-to <iso> --trigger release-check` (if DB available)
+10. `npm run run:security-promotion -- --mode dry-run --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id>` (if DB available)
 
 ## Required Evidence Package
 
@@ -22,11 +24,12 @@ Create `docs/release-evidence.md` from `docs/release-evidence-template.md` and i
 2. blockers/deferreds with owners and target dates,
 3. migration notes (lock risk + rollback plan),
 4. sign-off section marked `STATUS: APPROVED`.
+5. beta outcomes (`go|blocked|no-go`) and unresolved blockers with owner/date.
 
 ## Artifact Integrity and Signature Controls
 
 Required outputs:
-1. source bundle artifact (`artifacts/forge-source-<sha>.tar.gz`)
+1. source bundle artifact (`artifacts/forge-<channel>-<version>-<sha>.tar.gz`)
 2. checksum manifest (`artifacts/release.sha256`)
 3. detached signature (`artifacts/release.sha256.asc`)
 
@@ -36,11 +39,18 @@ Verification policy:
 3. signature verification must pass in workflow before publish,
 4. missing signing material is a hard release failure.
 
+## Distribution Channel Policy Checks (E9-S4)
+
+1. `docs/distribution-and-upgrade-policy.md` is referenced by release owner.
+2. `scripts/verify-distribution-policy.mjs --channel <stable|candidate|canary> --version <semver>` passes.
+3. `artifacts/distribution-manifest.json` is generated and attached with release artifacts.
+
 ## Governance and Scope Checks
 
 1. `node scripts/verify-governance-drift.mjs` must pass.
 2. AQ/MQ/DR status changes must not be silently promoted to Approved.
 3. `DECISION_LOG.md` must include release-impacting scope changes.
+4. For `E6-S4` closure, release evidence must reference the latest closure artifact in `docs/open-questions-resolution/` and its matching `DECISION_LOG.md` entry.
 
 ## Required Human Sign-Offs
 

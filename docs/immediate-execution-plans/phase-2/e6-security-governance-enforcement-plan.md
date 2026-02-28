@@ -3,7 +3,7 @@
 Stories: `E6-S1`, `E6-S2`, `E6-S3`, `E6-S4`
 Owner: Security Governance + Platform + Product Governance
 Priority: `P0`
-Status: In Progress (2026-02-28; implementation complete, governance approvals remain explicit/manual)
+Status: Done (2026-02-28; governance closure artifacts recorded, release-time approvals remain explicit/manual)
 
 ## Objective
 
@@ -48,6 +48,7 @@ Enforce trust and governance behavior for GA: policy-gated apply, explainable de
 5. `application_decision_records.md`
 6. `DECISION_LOG.md`
 7. `docs/runbooks/`
+8. `docs/open-questions-resolution/`
 
 ## Validation Commands
 
@@ -55,6 +56,13 @@ Enforce trust and governance behavior for GA: policy-gated apply, explainable de
 2. `npm run test`
 3. `npm run test:integration-db:docker`
 4. `node scripts/verify-governance-drift.mjs`
+
+## Closure Record (2026-02-28)
+
+1. Governance closure artifact is recorded at `docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`.
+2. Decision log audit entry is recorded in `DECISION_LOG.md` as `DLOG-0043`.
+3. Release-time human sign-off enforcement remains defined in `docs/release-checklist.md` and `docs/release-evidence-template.md`.
+4. Governance drift verification remains part of required validation (`node scripts/verify-governance-drift.mjs`).
 
 ## Exit Criteria
 

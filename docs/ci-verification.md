@@ -2,7 +2,7 @@
 
 ## Scope
 
-Continuous validation contract for Wave 7 and later (updated for Wave 9).
+Continuous validation contract for Wave 7 and later (updated through Wave 10 / Phase 3 ops hardening).
 
 Workflow:
 
@@ -23,11 +23,16 @@ Workflow:
 2. SLO rollup integration-db tests: `tests/integration-db/slo-rollup.integration-db.test.ts` (4 tests) — runs as part of `npm run test:integration-db:docker`.
 3. Wave 9 migration contract test: `tests/contract/migration-wave9.contract.test.ts` — validates migration 013 structure.
 4. Profile bundle integration-db tests: `tests/integration-db/profile-bundle.integration-db.test.ts` — validates profile lifecycle against real Postgres.
+5. Wave 10 migration contract test: `tests/contract/migration-wave10.contract.test.ts` — validates trust-gate migration structure and lock/rollback notes.
+6. Migration ordering contract test: `tests/contract/migration-ordering.contract.test.ts` — enforces one migration file per numeric prefix and deterministic `015 -> 016` ordering.
 
 ## Optional operator-level checks (not CI-required)
 
 1. `node scripts/run-slo-rollup.mjs --mode dry-run` — requires `FORGE_DATABASE_URL`.
 2. `node scripts/verify-governance-drift.mjs` — governance drift detection (no DB required).
+3. `node scripts/run-security-trust-gates.mjs --mode dry-run --action evaluate --window-from <iso> --window-to <iso>` — trust-gate decision dry-run (requires DB URL).
+4. `node scripts/run-security-promotion.mjs --mode dry-run --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id>` — promotion eligibility dry-run (requires DB URL).
+5. `node scripts/run-beta-readiness-report.mjs --mode dry-run --from <iso> --to <iso>` — beta KPI snapshot (requires DB URL).
 
 ## Profile e2e coverage (E9-S1 — implemented)
 
@@ -38,7 +43,7 @@ Workflow:
 ## Step 10 CI expansion status
 
 1. Profile-specific e2e scenario is implemented as `tests/e2e/profile-lifecycle-local.e2e.test.ts` (E9-S1) and is executed by required CI via `.github/workflows/forge-ci.yml` (`npm run test:e2e-local`).
-2. Ops smoke workflow is implemented as `.github/workflows/forge-ops-smoke.yml` (E9-S2). It remains intentionally non-blocking (`workflow_dispatch` + nightly cron) and runs retrieval-sync, outbox, dead-letter list, and SLO rollup in dry-run mode against ephemeral Postgres.
+2. Ops smoke workflow is implemented as `.github/workflows/forge-ops-smoke.yml` (E9-S2). It remains intentionally non-blocking (`workflow_dispatch` + nightly cron) and runs retrieval-sync, outbox, dead-letter list, SLO rollup, trust-gate evaluate dry-run, and promotion eligibility dry-run against ephemeral Postgres.
 3. Decision references: `DECISION_LOG.md` (`DLOG-0036`, `DLOG-0037`) and `docs/wave9-build-report.md`.
 
 ## CI assumptions

@@ -19,9 +19,10 @@ Scope: Concrete implementation plans for the immediate execution items in `docs/
 4. [E3-S1 Dependency Graph Expansion Plan](./e3-s1-dependency-graph-expansion-plan.md)
 5. [E5-S1 Update Lifecycle Prototype Plan](./e5-s1-update-lifecycle-prototype-plan.md)
 
-## Next Phase (Post-Immediate P0)
+## Next Phases
 
 1. [Phase 2 Execution Plans Index](./phase-2/README.md)
+2. [Phase 3 Execution Plans Index](./phase-3/README.md)
 
 ## Shared Quality Gates
 

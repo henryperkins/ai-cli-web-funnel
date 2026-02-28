@@ -81,7 +81,7 @@ VALUES (
   TRUE,
   'initial_rollout_state_until_gate_decisions',
   'bootstrap',
-  jsonb_build_object('source', 'migration-015'),
+  jsonb_build_object('source', 'migration-016'),
   now()
 )
 ON CONFLICT (singleton_key) DO NOTHING;

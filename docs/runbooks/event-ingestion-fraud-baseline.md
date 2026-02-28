@@ -71,3 +71,11 @@ Operational guide for DB-backed event ingestion, fraud-flag recording, and repla
 3. Reporter score recompute guard:
    - all recompute paths must execute `assert_security_reporter_metrics_ready()` first;
    - if guard fails, restore/refresh `security_reporter_metrics_30d` before rerun.
+
+## Trust-gate follow-on checks (Wave 10+)
+1. After high-severity reporter ingestions, run trust-gate snapshot dry-run:
+   - `npm run run:security-trust-gates -- --mode dry-run --action snapshot --window-from <iso> --window-to <iso>`
+2. Before any manual permanent block promotion, run promotion validation dry-run:
+   - `npm run run:security-promotion -- --mode dry-run --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id>`
+3. Escalation policy:
+   - if trust-gate dry-run shows freeze/regression, keep rollout in `raw-only` and investigate before enabling production promotions.

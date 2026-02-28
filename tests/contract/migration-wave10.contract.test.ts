@@ -7,7 +7,7 @@ describe('contract: wave10 security appeals and trust gates migration', () => {
     const sql = readFileSync(
       join(
         process.cwd(),
-        'infra/postgres/migrations/015_security_appeals_and_trust_gates.sql'
+        'infra/postgres/migrations/016_security_appeals_and_trust_gates.sql'
       ),
       'utf8'
     );

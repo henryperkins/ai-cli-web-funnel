@@ -14,6 +14,151 @@ import {
 import type { IngestionResult } from '../src/index.js';
 import type { PostgresQueryExecutor } from '../src/postgres-adapters.js';
 
+function createProfileRouteStub(overrides?: {
+  getProfileResult?: import('@forge/shared-contracts').ProfileRecord | null;
+  exportProfileResult?: import('@forge/shared-contracts').ProfileExportPayload | null;
+  installRunResult?: import('@forge/shared-contracts').ProfileInstallRunRecord | null;
+}) {
+  const baseProfile: import('@forge/shared-contracts').ProfileRecord = {
+    profile_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    name: 'stub-profile',
+    description: '',
+    author_id: 'stub-author',
+    visibility: 'private',
+    target_sdk: 'both',
+    tags: ['stub'],
+    version: '1',
+    profile_hash: 'stub-hash',
+    packages: [
+      {
+        package_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        package_slug: 'acme/stub',
+        version_pinned: null,
+        required: true,
+        install_order: 0,
+        config_overrides: {}
+      }
+    ],
+    created_at: '2026-02-27T12:00:00Z',
+    updated_at: '2026-02-27T12:00:00Z'
+  };
+
+  const baseExport: import('@forge/shared-contracts').ProfileExportPayload = {
+    format_version: '1.0.0',
+    profile: {
+      profile_id: baseProfile.profile_id,
+      name: baseProfile.name,
+      description: baseProfile.description,
+      author_id: baseProfile.author_id,
+      visibility: baseProfile.visibility,
+      target_sdk: baseProfile.target_sdk,
+      tags: baseProfile.tags,
+      version: baseProfile.version,
+      packages: baseProfile.packages
+    },
+    exported_at: '2026-02-27T12:00:00Z'
+  };
+
+  const baseRun: import('@forge/shared-contracts').ProfileInstallRunRecord = {
+    run_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    profile_id: baseProfile.profile_id,
+    status: 'succeeded',
+    total_packages: 1,
+    succeeded_count: 1,
+    failed_count: 0,
+    skipped_count: 0,
+    correlation_id: null,
+    started_at: '2026-02-27T12:00:00Z',
+    completed_at: '2026-02-27T12:00:01Z',
+    plans: [
+      {
+        plan_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        package_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        install_order: 0,
+        status: 'verified'
+      }
+    ]
+  };
+
+  const getProfileResult =
+    overrides && Object.hasOwn(overrides, 'getProfileResult')
+      ? overrides.getProfileResult
+      : baseProfile;
+
+  const exportProfileResult =
+    overrides && Object.hasOwn(overrides, 'exportProfileResult')
+      ? overrides.exportProfileResult
+      : baseExport;
+
+  const installRunResult =
+    overrides && Object.hasOwn(overrides, 'installRunResult')
+      ? overrides.installRunResult
+      : baseRun;
+
+  return {
+    async createProfile() {
+      return {
+        profile: baseProfile
+      };
+    },
+    async getProfile() {
+      return {
+        profile: getProfileResult
+      };
+    },
+    async listProfiles() {
+      return {
+        profiles: [
+          {
+            profile_id: baseProfile.profile_id,
+            name: baseProfile.name,
+            author_id: baseProfile.author_id,
+            visibility: baseProfile.visibility,
+            target_sdk: baseProfile.target_sdk,
+            tags: baseProfile.tags,
+            version: baseProfile.version,
+            package_count: baseProfile.packages.length,
+            created_at: baseProfile.created_at,
+            updated_at: baseProfile.updated_at
+          }
+        ]
+      };
+    },
+    async exportProfile() {
+      return {
+        export: exportProfileResult
+      };
+    },
+    async importProfile() {
+      return {
+        profile: {
+          ...baseProfile,
+          profile_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          name: 'imported-profile'
+        }
+      };
+    },
+    async installProfile() {
+      return {
+        run: baseRun,
+        plan_results: [
+          {
+            package_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            install_order: 0,
+            plan_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            status: 'verified'
+          }
+        ]
+      };
+    },
+    async getInstallRun() {
+      return {
+        run: installRunResult
+      };
+    }
+  } satisfies import('../src/profile-routes.js').ProfileRouteService;
+}
+
 function buildEventBody() {
   return {
     schema_version: '1.0.0',
@@ -850,6 +995,97 @@ describe('forge http app composition', () => {
     expect(rollbackReplay.statusCode).toBe(200);
     expect(rollbackReplay.headers['x-idempotent-replay']).toBe('true');
     expect(rollbackMissing.statusCode).toBe(404);
+  });
+
+  it('supports profile export through GET and POST for compatibility', async () => {
+    const app = createForgeHttpApp({
+      eventIngestion: createInMemoryEventDependencies(),
+      securityIngestion: {
+        reporters: new InMemoryReporterDirectory({}),
+        nonceStore: new InMemoryReporterNonceStore(),
+        persistence: new InMemorySecurityReportStore(),
+        signatureVerifier: {
+          async verify() {
+            return true;
+          }
+        }
+      },
+      profileRoutes: createProfileRouteStub()
+    });
+
+    const getExport = await app.handle({
+      method: 'GET',
+      path: '/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/export',
+      headers: {},
+      body: null
+    });
+    const postExport = await app.handle({
+      method: 'POST',
+      path: '/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/export',
+      headers: {},
+      body: null
+    });
+
+    expect(getExport.statusCode).toBe(200);
+    expect(postExport.statusCode).toBe(200);
+    expect(
+      (getExport.body as {
+        export: {
+          profile: {
+            profile_id: string;
+          };
+        };
+      }).export.profile.profile_id
+    ).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  });
+
+  it('returns profile-specific not found responses for export/get/install-run', async () => {
+    const app = createForgeHttpApp({
+      eventIngestion: createInMemoryEventDependencies(),
+      securityIngestion: {
+        reporters: new InMemoryReporterDirectory({}),
+        nonceStore: new InMemoryReporterNonceStore(),
+        persistence: new InMemorySecurityReportStore(),
+        signatureVerifier: {
+          async verify() {
+            return true;
+          }
+        }
+      },
+      profileRoutes: createProfileRouteStub({
+        getProfileResult: null,
+        exportProfileResult: null,
+        installRunResult: null
+      })
+    });
+
+    const getMissing = await app.handle({
+      method: 'GET',
+      path: '/v1/profiles/ffffffff-ffff-4fff-8fff-ffffffffffff',
+      headers: {},
+      body: null
+    });
+    const exportMissing = await app.handle({
+      method: 'GET',
+      path: '/v1/profiles/ffffffff-ffff-4fff-8fff-ffffffffffff/export',
+      headers: {},
+      body: null
+    });
+    const runMissing = await app.handle({
+      method: 'GET',
+      path: '/v1/profiles/install-runs/ffffffff-ffff-4fff-8fff-ffffffffffff',
+      headers: {},
+      body: null
+    });
+
+    expect(getMissing.statusCode).toBe(404);
+    expect((getMissing.body as { reason: string }).reason).toBe('profile_not_found');
+
+    expect(exportMissing.statusCode).toBe(404);
+    expect((exportMissing.body as { reason: string }).reason).toBe('profile_not_found');
+
+    expect(runMissing.statusCode).toBe(404);
+    expect((runMissing.body as { reason: string }).reason).toBe('install_run_not_found');
   });
 
   it('maps install lifecycle conflict and invalid-state failure classes for every mutating endpoint', async () => {

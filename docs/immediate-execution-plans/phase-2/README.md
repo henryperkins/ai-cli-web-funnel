@@ -26,8 +26,15 @@ Scope: Remaining `P0` execution plans after completing the immediate plan set (`
 3. `E3-S2/S3`: Done
 4. `E4`: Done (GA scope lock documented)
 5. `E5-S2/S3`: Done
-6. `E6`: In Progress (implementation complete; governance approvals remain explicit/manual)
+6. `E6`: Done (implementation complete; governance closure artifacts recorded; GA release sign-offs remain mandatory)
 7. `E9-S3`: Done
+
+## E6 Governance Closure Evidence (2026-02-28)
+
+1. E6 plan closure status: `docs/immediate-execution-plans/phase-2/e6-security-governance-enforcement-plan.md`
+2. Governance closure artifact: `docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`
+3. Release sign-off gate: `docs/release-checklist.md`
+4. Decision log audit entry: `DLOG-0043` in `DECISION_LOG.md`
 
 ## Suggested Execution Sequence
 
@@ -35,7 +42,7 @@ Scope: Remaining `P0` execution plans after completing the immediate plan set (`
 2. Run `E2-S2/S3` and `E3-S2/S3` in parallel once contract freeze is accepted.
 3. Run `E4` after compatibility matrix and planner conflict model are stable.
 4. Run `E5-S2/S3` after update/remove semantics are aligned with adapter capabilities.
-5. Run `E6` continuously in parallel, with final governance closure after enforcement behavior is proven.
+5. Keep `E6` governance checks running continuously (`check:governance` + release sign-off controls) as part of release readiness.
 6. Complete `E9-S3` once all required implementation gates are green.
 
 ## Shared Quality Gates
@@ -52,3 +59,8 @@ Scope: Remaining `P0` execution plans after completing the immediate plan set (`
 1. Each executed plan publishes an execution note: changed files, commands run, outcomes, blockers, and deferred items.
 2. Governance-sensitive changes update `DECISION_LOG.md` in the same change set.
 3. Any migration must include lock-risk and rollback notes in migration headers.
+4. `E6` governance changes must link a closure artifact under `docs/open-questions-resolution/`.
+
+## Post-Phase-2 Execution Index
+
+1. [Phase 3 Execution Plans Index](../phase-3/README.md)

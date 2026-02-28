@@ -155,7 +155,7 @@ Still gated:
 | create          | POST /v1/profiles                     | `tests/integration-db/profile-bundle.integration-db.test.ts` |
 | list            | GET /v1/profiles                      | `tests/integration-db/profile-bundle.integration-db.test.ts` |
 | get             | GET /v1/profiles/:id                  | `tests/integration-db/profile-bundle.integration-db.test.ts` |
-| export          | GET /v1/profiles/:id/export           | `tests/integration-db/profile-bundle.integration-db.test.ts` |
+| export          | GET\|POST /v1/profiles/:id/export (GET preferred; POST compatibility) | `tests/integration-db/profile-bundle.integration-db.test.ts`, `apps/control-plane/tests/http-app.test.ts` |
 | import          | POST /v1/profiles/import              | `tests/integration-db/profile-bundle.integration-db.test.ts` |
 | install         | POST /v1/profiles/:id/install         | `tests/integration-db/profile-bundle.integration-db.test.ts` |
 | get-install-run | GET /v1/profiles/install-runs/:run_id | `tests/integration-db/profile-bundle.integration-db.test.ts` |

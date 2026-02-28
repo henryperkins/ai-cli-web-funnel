@@ -64,7 +64,7 @@ Invariant:
 3. audit rows and outbox payloads share the same effective correlation ID.
 
 ## Preflight
-1. Apply migrations `001..015` (lifecycle state extension is in `014`).
+1. Apply migrations `001..016` (lifecycle state extension is in `014`, trust-gate rollout migration is in `016`).
 2. Set DB env: `FORGE_DATABASE_URL` (or `DATABASE_URL`).
 3. If retrieval is required, set:
    - `FORGE_REQUIRE_RETRIEVAL_BOOTSTRAP=true`

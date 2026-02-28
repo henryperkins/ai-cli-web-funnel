@@ -232,22 +232,30 @@ Priority: `P0`
 2. High-severity blockers are closed or explicitly deferred with sign-off.
 3. GA launch report is published with known limitations and next-wave commitments.
 
+## Post-Phase-2 Status Snapshot (2026-02-28)
+
+| Story | Status | Evidence |
+| --- | --- | --- |
+| E9-S1 | Done | `.github/workflows/forge-ci.yml`, `tests/e2e/profile-lifecycle-local.e2e.test.ts` |
+| E9-S2 | Done | `.github/workflows/forge-ops-smoke.yml` |
+| E9-S3 | Done | `docs/release-checklist.md`, `.github/workflows/forge-release.yml` |
+| E9-S4 | In Progress | `docs/immediate-execution-plans/phase-3/e9-s4-distribution-upgrade-policy-plan.md` |
+| E10-S1 | In Progress | `docs/immediate-execution-plans/phase-3/e10-s1-beta-pilot-execution-plan.md` |
+| E10-S2 | In Progress | `docs/immediate-execution-plans/phase-3/e10-s2-s3-triage-and-ga-decision-gate-plan.md` |
+| E10-S3 | In Progress | `docs/immediate-execution-plans/phase-3/e10-s2-s3-triage-and-ga-decision-gate-plan.md` |
+
 ## Immediate Next Sprint (Recommended)
 
-1. Deliver E9-S3 release checklist with required gate outputs and artifact signatures.
-2. Deliver E9-S4 package/CLI distribution channels and upgrade policy.
-3. Start E2-S2/E2-S3 catalog source expansion + freshness scheduling path.
-4. Define beta cohort and target metrics draft for E10-S1.
+1. Close `E9-S4` with channel policy, release guardrails, and signed distribution manifest outputs.
+2. Execute `E10-S1` beta pilot onboarding and baseline KPI snapshot reporting.
+3. Operationalize trust-gate scripts/runbooks and add trust-gate dry-runs to ops smoke.
+4. Complete `E10-S2/S3` triage and GA decision artifact templates with owner/date accountability.
+5. Start selected `P1` follow-ons (`E2-S4` identity conflict review workflow, `E7-S1` profile overlays, `E8-S1` SLO extensions).
 
 Immediate execution plan docs:
-1. `docs/immediate-execution-plans/e9-s1-profile-e2e-ci-plan.md`
-2. `docs/immediate-execution-plans/e9-s2-ops-smoke-workflow-plan.md`
-3. `docs/immediate-execution-plans/e2-s1-github-connector-plan.md`
-4. `docs/immediate-execution-plans/e3-s1-dependency-graph-expansion-plan.md`
-5. `docs/immediate-execution-plans/e5-s1-update-lifecycle-prototype-plan.md`
-
-Post-immediate phase docs:
-1. `docs/immediate-execution-plans/phase-2/README.md`
+1. `docs/immediate-execution-plans/README.md`
+2. `docs/immediate-execution-plans/phase-2/README.md`
+3. `docs/immediate-execution-plans/phase-3/README.md`
 
 ## Suggested Tracking Fields
 

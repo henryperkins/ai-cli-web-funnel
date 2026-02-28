@@ -1009,7 +1009,10 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         return jsonResponse(200, result);
       }
 
-      if (request.method === 'POST' && /^\/v1\/profiles\/[^/]+\/export$/i.test(path)) {
+      if (
+        (request.method === 'GET' || request.method === 'POST') &&
+        /^\/v1\/profiles\/[^/]+\/export$/i.test(path)
+      ) {
         if (!dependencies.profileRoutes) {
           return jsonResponse(503, { status: 'not_ready', reason: 'profile_routes_unavailable' });
         }

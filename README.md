@@ -45,13 +45,13 @@ Validated baseline (Wave 7 build report evidence):
 13. Internal ranking sync execution from outbox (`ranking.sync.requested`) with deterministic side effects and replay-safe effect dedupe.
 14. Dead-letter operator tooling (`scripts/run-outbox-dead-letter-replay.mjs`) with explicit confirmation and append-only replay audit trail.
 15. CI baseline in `.github/workflows/forge-ci.yml` covering typecheck/test/check/migration verification/integration-db docker flow.
-16. Migration set: additive migrations `001..015` with DR-018 verification guard (`scripts/verify-dr018-migration.mjs`) and wave migration contract coverage.
+16. Migration set: additive migrations `001..016` with deterministic numeric ordering (`015_catalog_source_freshness_and_reconciliation.sql` then `016_security_appeals_and_trust_gates.sql`), DR-018 verification guard (`scripts/verify-dr018-migration.mjs`), and wave migration contract coverage.
 17. Lifecycle expansion baseline: update/remove/rollback service + routes are implemented (`POST /v1/install/plans/:plan_id/update`, `POST /v1/install/plans/:plan_id/remove|uninstall`, `POST /v1/install/plans/:plan_id/rollback`) with idempotent replay/conflict semantics (migration `014_install_lifecycle_remove_rollback_states.sql`).
 18. Catalog reconciliation/freshness persistence baseline: docs-source reconciliation runner + freshness/reconciliation tables (`015_catalog_source_freshness_and_reconciliation.sql`) with API visibility via `GET /v1/packages/freshness`.
 
 Wave 8 foundations (in-source, pre-report):
 1. Profile/bundle contract types (`packages/shared-contracts/src/profiles.ts`) are exported and consumed by control-plane profile routes.
-2. Profile API routes in control-plane: `GET/POST /v1/profiles`, `GET /v1/profiles/:id`, `GET /v1/profiles/:id/export`, `POST /v1/profiles/import`, `POST /v1/profiles/:id/install`, `GET /v1/profiles/install-runs/:run_id`.
+2. Profile API routes in control-plane: `GET/POST /v1/profiles`, `GET /v1/profiles/:id`, `GET|POST /v1/profiles/:id/export` (GET preferred; POST retained for compatibility), `POST /v1/profiles/import`, `POST /v1/profiles/:id/install`, `GET /v1/profiles/install-runs/:run_id`.
 3. Profile API validation: strict input validation (UUID format, bounds, enum checks, `MAX_PROFILE_PACKAGES=200`), error taxonomy matching existing API style.
 4. Profile install-run orchestration: `profile_install_run_plans` linkage, status progression (`running`→`completed`/`failed`), aggregate counts from persisted per-plan outcomes.
 5. Profile install execution modes: `plan_only` (default) and `apply_verify` with idempotent replay-safe behavior.
@@ -79,10 +79,10 @@ Current verified baseline:
 6. `npm run test:integration-db:docker` passes.
 
 Known open items:
-1. Step 10 closure is implemented:
-   - `forge-ci.yml` now runs `npm run test:e2e-local` (includes profile lifecycle e2e coverage).
-   - `.github/workflows/forge-ops-smoke.yml` runs non-blocking manual/nightly dry-run ops smoke checks.
-2. Remaining post-wave closure items are product/release workflow items (`E9-S3`, `E9-S4`) rather than CI-path implementation gaps.
+1. `E9-S4`: finalize distribution channels + upgrade/rollback/deprecation policy execution path.
+2. `E10-S1`: execute closed beta pilot with cohort onboarding and KPI thresholds.
+3. `E10-S2`: run beta triage workflow and close high-severity failure classes.
+4. `E10-S3`: complete GA launch decision package with cross-functional sign-off.
 
 Important governance boundary:
 1. DR/AQ/MQ statuses remain `Proposed` / `Open` unless explicitly approved.
@@ -103,6 +103,7 @@ Important governance boundary:
    - `docs/runbooks/outbox-dead-letter-requeue.md`
    - `docs/runbooks/semantic-retrieval-incident-fallback.md`
    - `docs/runbooks/cron-failure-triage-and-replay-recovery.md`
+   - `docs/runbooks/security-trust-gate-operations.md`
 7. CI and validation contract: `docs/ci-verification.md`
 8. Wave build reports:
    - `docs/wave3-build-report.md`
@@ -112,9 +113,12 @@ Important governance boundary:
    - `docs/wave7-build-report.md`
    - `docs/wave8-build-report.md`
    - `docs/wave9-build-report.md`
+   - `docs/wave10-build-report.md`
 9. Execution plans: `docs/wave6-execution-plan.md`, `docs/wave7-execution-plan.md`, `docs/wave9-execution-plan.md`
 10. Application completion backlog: `docs/application-completion-backlog.md`
-11. Immediate execution plans: `docs/immediate-execution-plans/README.md`
+11. Immediate execution plans: `docs/immediate-execution-plans/README.md`, `docs/immediate-execution-plans/phase-2/README.md`, `docs/immediate-execution-plans/phase-3/README.md`
+12. Distribution and release policy: `docs/distribution-and-upgrade-policy.md`, `docs/release-checklist.md`, `docs/release-evidence-template.md`
+13. Beta/GA artifacts: `docs/beta-pilot-plan.md`, `docs/beta-triage-playbook.md`, `docs/ga-readiness-review-template.md`, `docs/ga-launch-report-template.md`
 
 ## Commands
 
@@ -133,6 +137,9 @@ npm run run:retrieval-sync -- --mode dry-run --limit 25
 npm run run:outbox -- --mode dry-run --limit 25
 npm run run:outbox-dead-letter -- --action list --limit 25
 npm run run:slo-rollup -- --mode dry-run --from 2026-02-28T00:00:00Z --to 2026-02-28T12:00:00Z --limit 100
+npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from 2026-02-21T00:00:00Z --window-to 2026-02-28T00:00:00Z --trigger manual
+npm run run:security-promotion -- --mode dry-run --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id>
+npm run run:beta-readiness -- --mode dry-run --from 2026-02-21T00:00:00Z --to 2026-02-28T00:00:00Z
 npm run run:control-plane
 scripts/local-stack-up.sh    # Bootstrap Postgres + Qdrant via docker-compose
 scripts/local-stack-down.sh  # Tear down local stack (preserves volumes)
@@ -141,7 +148,7 @@ scripts/local-stack-down.sh  # Tear down local stack (preserves volumes)
 ## Integration DB Prerequisites
 
 1. `npm run test:integration-db` requires `FORGE_INTEGRATION_DB_URL` pointing to a Postgres instance with migrations applied.
-2. `npm run test:integration-db:docker` provisions an ephemeral Docker Postgres instance, applies migrations `001..015`, and runs the integration-db suite automatically.
+2. `npm run test:integration-db:docker` provisions an ephemeral Docker Postgres instance, applies migrations `001..016` in lexical order, and runs the integration-db suite automatically.
 
 ## Wave Build Reports
 
@@ -152,6 +159,7 @@ scripts/local-stack-down.sh  # Tear down local stack (preserves volumes)
 5. `docs/wave7-build-report.md`
 6. `docs/wave8-build-report.md`
 7. `docs/wave9-build-report.md`
+8. `docs/wave10-build-report.md`
 
 ## Archived Build Prompt (Wave 9 Closure)
 

@@ -7,6 +7,14 @@ on:
         description: Path to release evidence markdown
         required: true
         default: docs/release-evidence.md
+      release_channel:
+        description: Distribution channel (stable/candidate/canary)
+        required: true
+        default: candidate
+      release_version:
+        description: Semantic version for policy validation (optional; defaults to package.json version)
+        required: false
+        default: ""
   release:
     types: [published]
 
@@ -29,6 +37,29 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Resolve distribution metadata
+        id: distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            CHANNEL="stable"
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          else
+            CHANNEL="${{ github.event.inputs.release_channel || 'candidate' }}"
+            VERSION="${{ github.event.inputs.release_version }}"
+            if [[ -z "$VERSION" ]]; then
+              VERSION="$(node -p "require('./package.json').version")"
+            fi
+            TAG="manual-${GITHUB_SHA}"
+          fi
+
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Required gate - check
         run: npm run check
@@ -69,15 +100,19 @@ jobs:
           done
 
       - name: Generate release artifacts and checksums
+        id: artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
 
-          ARCHIVE_NAME="forge-source-${GITHUB_SHA}.tar.gz"
+          VERSION_SAFE="$(echo "${{ steps.distribution.outputs.version }}" | tr -c 'A-Za-z0-9._-' '_')"
+          ARCHIVE_NAME="forge-${{ steps.distribution.outputs.channel }}-${VERSION_SAFE}-${GITHUB_SHA}.tar.gz"
           git archive --format=tar.gz --output "artifacts/${ARCHIVE_NAME}" HEAD
 
           sha256sum "artifacts/${ARCHIVE_NAME}" > artifacts/release.sha256
+
+          echo "archive_name=$ARCHIVE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Verify signing material is configured
         shell: bash
@@ -133,6 +168,17 @@ jobs:
       - name: Verify checksum signature
         run: gpg --verify artifacts/release.sha256.asc artifacts/release.sha256
 
+      - name: Validate distribution policy and emit manifest
+        run: |
+          node scripts/verify-distribution-policy.mjs \
+            --channel "${{ steps.distribution.outputs.channel }}" \
+            --version "${{ steps.distribution.outputs.version }}" \
+            --release-tag "${{ steps.distribution.outputs.tag }}" \
+            --artifact-name "${{ steps.artifacts.outputs.archive_name }}" \
+            --checksum-path artifacts/release.sha256 \
+            --signature-path artifacts/release.sha256.asc \
+            --manifest-out artifacts/distribution-manifest.json
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -141,4 +187,5 @@ jobs:
             artifacts/*.tar.gz
             artifacts/release.sha256
             artifacts/release.sha256.asc
+            artifacts/distribution-manifest.json
           retention-days: 30

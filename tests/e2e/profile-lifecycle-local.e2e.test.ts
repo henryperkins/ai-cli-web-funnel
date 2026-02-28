@@ -536,7 +536,7 @@ function buildApp() {
 // ---------------------------------------------------------------------------
 
 describe('e2e local: profile lifecycle', () => {
-  it('create -> export -> import -> install (plan_only) -> install (apply_verify) -> verify status', async () => {
+  it('create -> export (GET canonical, POST compatibility) -> import -> install (plan_only) -> install (apply_verify) -> verify status', async () => {
     const { app } = buildApp();
 
     // Step 1: Create profile
@@ -585,18 +585,30 @@ describe('e2e local: profile lifecycle', () => {
     expect(listed.length).toBeGreaterThanOrEqual(1);
     expect(listed.some((p) => p.profile_id === profileId)).toBe(true);
 
-    // Step 4: Export profile
-    const exportRes = await app.handle({
+    // Step 4: Export profile (GET canonical, POST compatibility)
+    const exportGetRes = await app.handle({
+      method: 'GET',
+      path: `/v1/profiles/${profileId}/export`,
+      headers: {},
+      body: null
+    });
+    expect(exportGetRes.statusCode).toBe(200);
+    const exportPayload = (exportGetRes.body as { export: ProfileExportPayload }).export;
+    expect(exportPayload.format_version).toBe('1.0.0');
+    expect(exportPayload.profile.name).toBe('E2E Profile');
+    expect(exportPayload.profile.packages).toHaveLength(2);
+    const exportPostCompatRes = await app.handle({
       method: 'POST',
       path: `/v1/profiles/${profileId}/export`,
       headers: {},
       body: null
     });
-    expect(exportRes.statusCode).toBe(200);
-    const exportPayload = (exportRes.body as { export: ProfileExportPayload }).export;
-    expect(exportPayload.format_version).toBe('1.0.0');
-    expect(exportPayload.profile.name).toBe('E2E Profile');
-    expect(exportPayload.profile.packages).toHaveLength(2);
+    expect(exportPostCompatRes.statusCode).toBe(200);
+    const exportPostCompatPayload = (exportPostCompatRes.body as { export: ProfileExportPayload }).export;
+    expect(exportPostCompatPayload.format_version).toBe(exportPayload.format_version);
+    expect(exportPostCompatPayload.profile.profile_id).toBe(profileId);
+    expect(exportPostCompatPayload.profile.name).toBe(exportPayload.profile.name);
+    expect(exportPostCompatPayload.profile.packages).toEqual(exportPayload.profile.packages);
 
     // Step 5: Import the exported profile
     const importRes = await app.handle({

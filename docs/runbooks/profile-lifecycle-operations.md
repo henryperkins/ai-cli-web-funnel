@@ -26,7 +26,7 @@ A profile encodes a curated set of addon packages with install ordering. The lif
 | POST | `/v1/profiles` | Create a new profile |
 | GET | `/v1/profiles` | List all profiles |
 | GET | `/v1/profiles/:id` | Get a single profile by ID |
-| GET | `/v1/profiles/:id/export` | Export profile as portable JSON |
+| GET\|POST | `/v1/profiles/:id/export` | Export profile as portable JSON (GET preferred; POST supported for compatibility) |
 | POST | `/v1/profiles/import` | Import a profile from exported JSON |
 | POST | `/v1/profiles/:id/install` | Install a profile (plan_only or apply_verify) |
 | GET | `/v1/profiles/install-runs/:run_id` | Get install run status and per-plan results |
@@ -57,7 +57,7 @@ A profile encodes a curated set of addon packages with install ordering. The lif
    curl -s http://localhost:3000/v1/profiles/<profile_id> | jq .
    ```
 
-4. Export a profile:
+4. Export a profile (GET preferred; POST also supported for compatibility):
    ```bash
    curl -s http://localhost:3000/v1/profiles/<profile_id>/export | jq . > profile-export.json
    ```

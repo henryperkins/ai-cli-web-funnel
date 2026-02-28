@@ -18,10 +18,13 @@ Primary framing lives in the root `README.md`.
 3. Wave 9 delivers SLO rollup and governance automation foundations via migration `013_operational_slo_rollup_foundations.sql`.
 4. Wave 10 lifecycle expansion is live via migration `014_install_lifecycle_remove_rollback_states.sql` and install lifecycle routes for update/remove/rollback.
 5. Catalog reconciliation/freshness persistence is live via migration `015_catalog_source_freshness_and_reconciliation.sql` and `GET /v1/packages/freshness`.
-6. Step 10 CI expansion is implemented:
+6. Wave 10 trust-gate schema is live via migration `016_security_appeals_and_trust_gates.sql` (appeals SLA fields, rollout-state table, promotion decisions, permanent-block SQL guards).
+7. Step 10 CI expansion is implemented:
    - required CI runs `npm run test:e2e-local` (includes profile lifecycle coverage),
    - `.github/workflows/forge-ops-smoke.yml` executes non-blocking nightly/manual dry-run ops smoke checks.
-7. Required CI checks are documented in `docs/ci-verification.md`.
+8. Required CI checks are documented in `docs/ci-verification.md`.
+9. Phase 2 `P0` execution plans are closed, including `E6` governance closure tracking and release-gated approval controls (`docs/immediate-execution-plans/phase-2/README.md`, `docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`).
+10. Phase 3 execution index is active for release-candidate, distribution policy, and beta/GA artifacts (`docs/immediate-execution-plans/phase-3/README.md`).
 
 ## Governance and Decision Records
 
@@ -35,6 +38,7 @@ Primary framing lives in the root `README.md`.
 6. Guardrail tracker: `OPEN_QUESTIONS_TRACKER.md`
 7. Implementation-time decision log: `DECISION_LOG.md`
 8. CI verification contract: `docs/ci-verification.md`
+9. E6 governance closure artifact: `docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`
 
 ## Runbooks
 
@@ -48,6 +52,7 @@ Primary framing lives in the root `README.md`.
 8. `docs/runbooks/semantic-retrieval-incident-fallback.md`
 9. `docs/runbooks/cron-failure-triage-and-replay-recovery.md`
 10. `docs/runbooks/migration-rollout-and-rollback.md`
+11. `docs/runbooks/security-trust-gate-operations.md`
 
 ## Wave Reports
 
@@ -58,6 +63,7 @@ Primary framing lives in the root `README.md`.
 5. `docs/wave7-build-report.md`
 6. `docs/wave8-build-report.md`
 7. `docs/wave9-build-report.md`
+8. `docs/wave10-build-report.md`
 
 ## Execution Plans
 
@@ -69,6 +75,14 @@ Primary framing lives in the root `README.md`.
 
 1. `docs/application-completion-backlog.md`
 
+## Distribution and Beta/GA Artifacts
+
+1. `docs/distribution-and-upgrade-policy.md`
+2. `docs/beta-pilot-plan.md`
+3. `docs/beta-triage-playbook.md`
+4. `docs/ga-readiness-review-template.md`
+5. `docs/ga-launch-report-template.md`
+
 ## Immediate Execution Plans
 
 1. `docs/immediate-execution-plans/README.md`
@@ -78,6 +92,7 @@ Primary framing lives in the root `README.md`.
 5. `docs/immediate-execution-plans/e3-s1-dependency-graph-expansion-plan.md`
 6. `docs/immediate-execution-plans/e5-s1-update-lifecycle-prototype-plan.md`
 7. `docs/immediate-execution-plans/phase-2/README.md`
+8. `docs/immediate-execution-plans/phase-3/README.md`
 
 ## Validation Entry Points
 
@@ -85,3 +100,4 @@ Primary framing lives in the root `README.md`.
 2. `npm run verify:migrations:dr018`
 3. `npm run test:e2e-local`
 4. `npm run test:integration-db:docker`
+5. `npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from <iso> --window-to <iso> --trigger docs-index`
