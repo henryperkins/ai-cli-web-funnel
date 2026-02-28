@@ -281,3 +281,20 @@ This log captures implementation-time decisions taken while AQ/MQ items are stil
 - Decision: implement prototype update path via `updatePlan` service and `POST /v1/install/plans/:plan_id/update` endpoint; reuse existing idempotency + audit model and persist update attempts through `install_apply_attempts` with `details.operation = "update"`.
 - Rationale: provides replay-safe update capability without introducing destructive schema changes; keeps prototype constraints explicit for follow-on remove/rollback stories (`E5-S2`, `E5-S3`).
 - Related: E5-S1, DR-011, DR-017.
+
+## DLOG-0041 (2026-02-28)
+
+- Scope: DR-020 launch-contract closure (`discover -> choose -> install proxy -> validate`).
+- Decision: add launch-baseline registry connectors (`npm`, `pypi`) for catalog ingest (`packages/catalog/src/sources/npm-connector.ts`, `packages/catalog/src/sources/pypi-connector.ts`) and wire `scripts/run-catalog-ingest.mjs --source npm|pypi`; extend operational SLO rollups with DR-002 funnel KPIs (`funnel.ttfsc.p90_seconds`, `funnel.cold_start.success_rate`, `funnel.retryless.success_rate`).
+- Rationale: closes remaining DR-020 acceptance gaps by ensuring Tier-3 feed degradation does not block launch-critical ingestion and by making weekly KPI reporting cover `search -> first successful runtime call` outcomes.
+- Related: DR-002, DR-020, AQ-003, AQ-056, MQ-038.
+
+## DLOG-0042 (2026-02-28)
+
+- Scope: post-immediate P0 re-baseline before remaining implementation work.
+- Decision: re-baseline docs/indexes to current code truth before new feature work, specifically:
+  - lifecycle state includes update/remove/rollback routes + service path,
+  - active migration range includes `014_install_lifecycle_remove_rollback_states.sql`,
+  - Step 10 CI expansion is implemented (`forge-ci.yml` profile e2e coverage and non-blocking `forge-ops-smoke.yml`).
+- Rationale: prevents stale documentation from masking real implementation gaps during remaining P0 execution and keeps release/readiness reporting deterministic.
+- Related: E1, E2-S2/S3, E3-S2/S3, E5-S2/S3, E9-S3.

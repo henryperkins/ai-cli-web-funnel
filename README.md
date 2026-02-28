@@ -30,7 +30,7 @@ Forge aims to replace that with a deterministic path:
 ## Current Repository State (Post Wave 7 + Wave 8/9 Delivery)
 
 Validated baseline (Wave 7 build report evidence):
-1. Discover stage: deterministic catalog ingest domain + executable ingest runner (`scripts/run-catalog-ingest.mjs`) with replay-safe persistence over `registry.packages`, `package_aliases`, `package_merge_runs`, `package_field_lineage`, and `package_identity_conflicts`.
+1. Discover stage: deterministic catalog ingest domain + executable ingest runner (`scripts/run-catalog-ingest.mjs`) with replay-safe persistence over `registry.packages`, `package_aliases`, `package_merge_runs`, `package_field_lineage`, and `package_identity_conflicts`, plus launch-baseline source normalization for `github`, `npm`, and `pypi`.
 2. Discover API: `GET /v1/packages`, `GET /v1/packages/:package_id`, and `POST /v1/packages/search` with ranking lineage (`embedding_model_version`, `vector_collection_version`) and `semantic_fallback` signaling.
 3. Retrieval path: concrete Postgres BM25 retriever, Qdrant semantic retriever, and OpenAI-compatible embedding provider wired into control-plane bootstrap (`apps/control-plane/src/retrieval-bootstrap.ts`).
 4. Retrieval sync/backfill path: deterministic projection + fingerprinting + bounded batching via `packages/ranking/src/retrieval-sync.ts` and `scripts/run-retrieval-sync.mjs`.
@@ -45,7 +45,9 @@ Validated baseline (Wave 7 build report evidence):
 13. Internal ranking sync execution from outbox (`ranking.sync.requested`) with deterministic side effects and replay-safe effect dedupe.
 14. Dead-letter operator tooling (`scripts/run-outbox-dead-letter-replay.mjs`) with explicit confirmation and append-only replay audit trail.
 15. CI baseline in `.github/workflows/forge-ci.yml` covering typecheck/test/check/migration verification/integration-db docker flow.
-16. Migration set: additive migrations `001..013` with DR-018 verification guard (`scripts/verify-dr018-migration.mjs`) and wave migration contract coverage.
+16. Migration set: additive migrations `001..015` with DR-018 verification guard (`scripts/verify-dr018-migration.mjs`) and wave migration contract coverage.
+17. Lifecycle expansion baseline: update/remove/rollback service + routes are implemented (`POST /v1/install/plans/:plan_id/update`, `POST /v1/install/plans/:plan_id/remove|uninstall`, `POST /v1/install/plans/:plan_id/rollback`) with idempotent replay/conflict semantics (migration `014_install_lifecycle_remove_rollback_states.sql`).
+18. Catalog reconciliation/freshness persistence baseline: docs-source reconciliation runner + freshness/reconciliation tables (`015_catalog_source_freshness_and_reconciliation.sql`) with API visibility via `GET /v1/packages/freshness`.
 
 Wave 8 foundations (in-source, pre-report):
 1. Profile/bundle contract types (`packages/shared-contracts/src/profiles.ts`) are exported and consumed by control-plane profile routes.
@@ -59,7 +61,7 @@ Wave 8 foundations (in-source, pre-report):
 9. Deterministic outbox dispatcher supports `security.report.accepted` (plus existing lifecycle/ranking/security event families).
 
 Wave 9 closure artifacts:
-1. Operational SLO rollup module (`packages/security-governance/src/slo-rollup.ts`) with deterministic metric computation across 7 SLO metric families.
+1. Operational SLO rollup module (`packages/security-governance/src/slo-rollup.ts`) with deterministic metric computation across 10 SLO metric families, including DR-002 funnel KPIs (`TTFSC p90`, `cold_start.success_rate`, `retryless.success_rate`).
 2. Additive migration `013_operational_slo_rollup_foundations.sql` introducing `operational_slo_rollup_runs` and `operational_slo_snapshots`.
 3. SLO rollup operator runner (`scripts/run-slo-rollup.mjs`) with `--mode dry-run|production`, `--from`, `--to`, `--limit`, deterministic run IDs, and structured logs.
 4. SLO rollup unit tests (`packages/security-governance/tests/slo-rollup.test.ts`) and integration-db tests (`tests/integration-db/slo-rollup.integration-db.test.ts`).
@@ -88,17 +90,21 @@ Important governance boundary:
 ## Documentation Map
 
 1. Product and architecture decisions: `application_decision_records.md`
-2. Open architecture/product questions: `application_master_open_questions.md`, `master_open_questions.md`
-3. Execution guardrails: `OPEN_QUESTIONS_TRACKER.md`, `DECISION_LOG.md`
-4. Operational runbooks:
+2. Frozen v1 contracts:
+   - `docs/contracts/v1-addon-metadata-contract.md`
+   - `docs/contracts/v1-lifecycle-api-contract.md`
+3. Compatibility matrix: `docs/compatibility-matrix.md`
+4. Open architecture/product questions: `application_master_open_questions.md`, `master_open_questions.md`
+5. Execution guardrails: `OPEN_QUESTIONS_TRACKER.md`, `DECISION_LOG.md`
+6. Operational runbooks:
    - `docs/runbooks/profile-lifecycle-operations.md`
    - `docs/runbooks/slo-rollup-operations.md`
    - `docs/runbooks/retrieval-sync-backfill-and-recovery.md`
    - `docs/runbooks/outbox-dead-letter-requeue.md`
    - `docs/runbooks/semantic-retrieval-incident-fallback.md`
    - `docs/runbooks/cron-failure-triage-and-replay-recovery.md`
-5. CI and validation contract: `docs/ci-verification.md`
-6. Wave build reports:
+7. CI and validation contract: `docs/ci-verification.md`
+8. Wave build reports:
    - `docs/wave3-build-report.md`
    - `docs/wave4-build-report.md`
    - `docs/wave5-build-report.md`
@@ -106,9 +112,9 @@ Important governance boundary:
    - `docs/wave7-build-report.md`
    - `docs/wave8-build-report.md`
    - `docs/wave9-build-report.md`
-7. Execution plans: `docs/wave6-execution-plan.md`, `docs/wave7-execution-plan.md`, `docs/wave9-execution-plan.md`
-8. Application completion backlog: `docs/application-completion-backlog.md`
-9. Immediate execution plans: `docs/immediate-execution-plans/README.md`
+9. Execution plans: `docs/wave6-execution-plan.md`, `docs/wave7-execution-plan.md`, `docs/wave9-execution-plan.md`
+10. Application completion backlog: `docs/application-completion-backlog.md`
+11. Immediate execution plans: `docs/immediate-execution-plans/README.md`
 
 ## Commands
 
@@ -121,6 +127,8 @@ npm run verify:migrations:dr018
 npm run test:integration-db
 npm run test:integration-db:docker
 npm run test:e2e-local
+npm run run:catalog-ingest -- --mode dry-run --source docs --input <docs-source-json>
+npm run run:catalog-reconciliation -- --mode dry-run --source docs --input <docs-source-json>
 npm run run:retrieval-sync -- --mode dry-run --limit 25
 npm run run:outbox -- --mode dry-run --limit 25
 npm run run:outbox-dead-letter -- --action list --limit 25
@@ -133,7 +141,7 @@ scripts/local-stack-down.sh  # Tear down local stack (preserves volumes)
 ## Integration DB Prerequisites
 
 1. `npm run test:integration-db` requires `FORGE_INTEGRATION_DB_URL` pointing to a Postgres instance with migrations applied.
-2. `npm run test:integration-db:docker` provisions an ephemeral Docker Postgres instance, applies migrations `001..013`, and runs the integration-db suite automatically.
+2. `npm run test:integration-db:docker` provisions an ephemeral Docker Postgres instance, applies migrations `001..015`, and runs the integration-db suite automatically.
 
 ## Wave Build Reports
 

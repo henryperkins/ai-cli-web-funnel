@@ -6,7 +6,13 @@ import process from 'node:process';
 import { Pool } from 'pg';
 import { createCatalogIngestService } from '@forge/catalog';
 import { createCatalogPostgresAdapters } from '@forge/catalog/postgres-adapters';
+import {
+  DocsSourceConnectorError,
+  runDocsConnector
+} from '@forge/catalog/sources/docs-connector';
 import { normalizeGitHubRepos } from '@forge/catalog/sources/github-connector';
+import { normalizeNpmPackages } from '@forge/catalog/sources/npm-connector';
+import { normalizePyPiProjects } from '@forge/catalog/sources/pypi-connector';
 
 function getArg(flag) {
   const index = process.argv.indexOf(flag);
@@ -120,6 +126,28 @@ function summarize(result) {
   };
 }
 
+function sourceItems(parsed, keys) {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+
+  for (const key of keys) {
+    if (Array.isArray(parsed?.[key])) {
+      return parsed[key];
+    }
+  }
+
+  return [];
+}
+
+function hashRunIdentity(prefix, values) {
+  const digest = createHash('sha256')
+    .update(stableJson(values), 'utf8')
+    .digest('hex')
+    .slice(0, 16);
+  return `${prefix}-${digest}`;
+}
+
 const mode = (getArg('--mode') ?? 'dry-run').toLowerCase();
 if (mode !== 'dry-run' && mode !== 'apply') {
   console.error('Invalid --mode. Expected dry-run or apply.');
@@ -145,19 +173,128 @@ try {
 }
 
 if (sourceMode === 'github') {
-  const repos = Array.isArray(parsed) ? parsed : parsed.repos ?? parsed.items ?? [];
+  const repos = sourceItems(parsed, ['repos', 'items']);
   const toolKind = getArg('--tool-kind') ?? 'mcp';
   const { candidates, skipped } = normalizeGitHubRepos(repos, { toolKind });
   if (skipped.length > 0) {
     logEvent('catalog_ingest.github_skipped', { count: skipped.length, skipped });
   }
   parsed = {
-    merge_run_id: `github-${createHash('sha256').update(JSON.stringify(repos.map((r) => r.id))).digest('hex').slice(0, 16)}`,
+    merge_run_id: hashRunIdentity(
+      'github',
+      repos
+        .map((repo) => ({
+          id: repo?.id ?? null,
+          full_name: repo?.full_name ?? null
+        }))
+        .sort((left, right) => String(left.full_name).localeCompare(String(right.full_name)))
+    ),
     occurred_at: new Date().toISOString(),
     source_snapshot: { source: 'github', repo_count: repos.length },
     detected_by: 'github-connector',
     candidates
   };
+} else if (sourceMode === 'npm') {
+  const packages = sourceItems(parsed, ['packages', 'items']);
+  const toolKind = getArg('--tool-kind') ?? 'mcp';
+  const { candidates, skipped } = normalizeNpmPackages(packages, { toolKind });
+  if (skipped.length > 0) {
+    logEvent('catalog_ingest.npm_skipped', { count: skipped.length, skipped });
+  }
+
+  parsed = {
+    merge_run_id: hashRunIdentity(
+      'npm',
+      packages
+        .map((pkg) => (typeof pkg?.name === 'string' ? pkg.name.toLowerCase() : null))
+        .filter((name) => name !== null)
+        .sort((left, right) => left.localeCompare(right))
+    ),
+    occurred_at: new Date().toISOString(),
+    source_snapshot: { source: 'npm', package_count: packages.length },
+    detected_by: 'npm-connector',
+    candidates
+  };
+} else if (sourceMode === 'pypi') {
+  const projects = sourceItems(parsed, ['projects', 'items']);
+  const toolKind = getArg('--tool-kind') ?? 'mcp';
+  const { candidates, skipped } = normalizePyPiProjects(projects, { toolKind });
+  if (skipped.length > 0) {
+    logEvent('catalog_ingest.pypi_skipped', { count: skipped.length, skipped });
+  }
+
+  parsed = {
+    merge_run_id: hashRunIdentity(
+      'pypi',
+      projects
+        .map((project) => (typeof project?.info?.name === 'string' ? project.info.name.toLowerCase() : null))
+        .filter((name) => name !== null)
+        .sort((left, right) => left.localeCompare(right))
+    ),
+    occurred_at: new Date().toISOString(),
+    source_snapshot: { source: 'pypi', project_count: projects.length },
+    detected_by: 'pypi-connector',
+    candidates
+  };
+} else if (sourceMode === 'docs') {
+  const docs = sourceItems(parsed, ['docs', 'documents', 'items']);
+  const urls = Array.isArray(parsed?.urls)
+    ? parsed.urls.filter((entry) => typeof entry === 'string')
+    : [];
+  const toolKind = getArg('--tool-kind') ?? 'mcp';
+
+  try {
+    const { normalized, fetch_metadata: fetchMetadata } = await runDocsConnector(
+      {
+        ...(docs.length > 0 ? { docs } : {}),
+        ...(urls.length > 0 ? { urls } : {})
+      },
+      {
+        toolKind
+      }
+    );
+
+    const { candidates, skipped } = normalized;
+    if (skipped.length > 0) {
+      logEvent('catalog_ingest.docs_skipped', { count: skipped.length, skipped });
+    }
+
+    parsed = {
+      merge_run_id: hashRunIdentity(
+        'docs',
+        candidates
+          .map((candidate) => ({
+            source_name: candidate.source_name,
+            package_slug: candidate.package_slug ?? null,
+            registry_package_locator: candidate.registry_package_locator ?? null
+          }))
+          .sort((left, right) =>
+            String(left.registry_package_locator).localeCompare(
+              String(right.registry_package_locator)
+            )
+          )
+      ),
+      occurred_at: new Date().toISOString(),
+      source_snapshot: {
+        source: 'docs',
+        doc_count: docs.length,
+        url_count: urls.length,
+        fetched_count: fetchMetadata.total_fetched
+      },
+      detected_by: 'docs-connector',
+      candidates
+    };
+  } catch (error) {
+    if (error instanceof DocsSourceConnectorError) {
+      logEvent('catalog_ingest.docs_failed', {
+        failure_class: error.failure_class,
+        error_message: error.message
+      });
+      process.exit(1);
+    }
+
+    throw error;
+  }
 }
 
 const runs = normalizeInput(parsed);

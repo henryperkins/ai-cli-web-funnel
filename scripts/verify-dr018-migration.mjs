@@ -1,15 +1,21 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export function verifyDr018Migration(root = process.cwd()) {
   const files = {
     cutover: resolve(root, 'infra/postgres/migrations/005_registry_packages_cutover.sql'),
-    runtime: resolve(root, 'infra/postgres/migrations/006_security_reporter_runtime.sql')
+    runtime: resolve(root, 'infra/postgres/migrations/006_security_reporter_runtime.sql'),
+    prTemplate: resolve(root, '.github/PULL_REQUEST_TEMPLATE.md'),
+    cronChecklist: resolve(root, 'docs/runbooks/cron-go-live-checklist.md')
   };
 
   const cutoverSql = readFileSync(files.cutover, 'utf8');
   const runtimeSql = readFileSync(files.runtime, 'utf8');
+  const prTemplate =
+    existsSync(files.prTemplate) ? readFileSync(files.prTemplate, 'utf8') : '';
+  const cronChecklist =
+    existsSync(files.cronChecklist) ? readFileSync(files.cronChecklist, 'utf8') : '';
 
   const checks = [
     {
@@ -39,6 +45,22 @@ export function verifyDr018Migration(root = process.cwd()) {
     {
       name: 'reporter score recompute path asserts metrics readiness guard',
       pass: /PERFORM\s+assert_security_reporter_metrics_ready\(\)/si.test(runtimeSql)
+    },
+    {
+      name: 'migration PR template includes lock risk, rollback, and reviewer sign-off sections',
+      pass:
+        /Lock (Risk|Impact)/si.test(prTemplate) &&
+        /Rollback/si.test(prTemplate) &&
+        /Reviewer Sign-?off/si.test(prTemplate)
+    },
+    {
+      name: 'cron go-live checklist includes dry-run, shadow, production, and replay evidence gates',
+      pass:
+        /dry-run/si.test(cronChecklist) &&
+        /shadow/si.test(cronChecklist) &&
+        /production/si.test(cronChecklist) &&
+        /replay/i.test(cronChecklist) &&
+        /reconciliation/i.test(cronChecklist)
     }
   ];
 

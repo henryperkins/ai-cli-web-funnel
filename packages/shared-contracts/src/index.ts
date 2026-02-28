@@ -4,6 +4,7 @@ export * from './event-types.js';
 export * from './event-validation.js';
 export * from './feature-flags.js';
 export * from './identity.js';
+export * from './install-lifecycle.js';
 export * from './merge-precedence.js';
 export * from './profiles.js';
 export * from './telemetry-envelope.js';

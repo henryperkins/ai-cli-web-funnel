@@ -46,7 +46,7 @@ describe('integration-db: operational SLO rollup', () => {
     });
 
     expect(result.persisted).toBe(false);
-    expect(result.metrics).toHaveLength(7);
+    expect(result.metrics).toHaveLength(10);
 
     // Verify nothing was persisted
     const runCount = await pool.query(
@@ -73,7 +73,7 @@ describe('integration-db: operational SLO rollup', () => {
     });
 
     expect(result.persisted).toBe(true);
-    expect(result.metrics).toHaveLength(7);
+    expect(result.metrics).toHaveLength(10);
 
     // Verify run row exists with correct status
     const runs = await pool.query<{
@@ -89,7 +89,7 @@ describe('integration-db: operational SLO rollup', () => {
     expect(runs.rows[0]?.run_id).toBe('integ-prod-001');
     expect(runs.rows[0]?.mode).toBe('production');
     expect(runs.rows[0]?.status).toBe('completed');
-    expect(runs.rows[0]?.snapshot_count).toBe(7);
+    expect(runs.rows[0]?.snapshot_count).toBe(10);
     expect(runs.rows[0]?.trigger).toBe('integration-test');
 
     // Verify snapshot rows
@@ -104,10 +104,13 @@ describe('integration-db: operational SLO rollup', () => {
        FROM operational_slo_snapshots
        ORDER BY metric_key`
     );
-    expect(snaps.rows).toHaveLength(7);
+    expect(snaps.rows).toHaveLength(10);
 
     const metricKeys = snaps.rows.map((r) => r.metric_key).sort();
     expect(metricKeys).toEqual([
+      'funnel.cold_start.success_rate',
+      'funnel.retryless.success_rate',
+      'funnel.ttfsc.p90_seconds',
       'governance.recompute.dispatch_success_rate',
       'install.apply.success_rate',
       'install.lifecycle.replay_ratio',

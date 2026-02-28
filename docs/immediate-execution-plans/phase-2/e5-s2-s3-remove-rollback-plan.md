@@ -3,7 +3,7 @@
 Stories: `E5-S2`, `E5-S3`
 Owner: Control Plane + Runtime
 Priority: `P0`
-Status: Not Started
+Status: Done (2026-02-28)
 
 ## Objective
 

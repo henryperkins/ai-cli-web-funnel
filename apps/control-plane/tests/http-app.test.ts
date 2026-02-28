@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { INSTALL_LIFECYCLE_HTTP_ERROR_REASON } from '@forge/shared-contracts';
 import {
   InMemoryReporterDirectory,
   InMemoryReporterNonceStore,
@@ -364,6 +365,25 @@ describe('forge http app composition', () => {
               }
             ]
           };
+        },
+        async getFreshnessStatus() {
+          return {
+            generated_at: '2026-03-01T00:00:00Z',
+            sources: [
+              {
+                source_name: 'docs',
+                status: 'succeeded',
+                stale: false,
+                stale_after_minutes: 1440,
+                last_attempt_at: '2026-03-01T00:00:00Z',
+                last_success_at: '2026-03-01T00:00:00Z',
+                merge_run_id: 'merge-docs-1',
+                failure_class: null,
+                failure_message: null,
+                updated_at: '2026-03-01T00:00:00Z'
+              }
+            ]
+          };
         }
       }
     });
@@ -400,6 +420,12 @@ describe('forge http app composition', () => {
         query: 'catalog'
       }
     });
+    const freshness = await app.handle({
+      method: 'GET',
+      path: '/v1/packages/freshness',
+      headers: {},
+      body: null
+    });
 
     expect(list.statusCode).toBe(200);
     expect((list.body as { packages: unknown[] }).packages).toHaveLength(1);
@@ -411,6 +437,8 @@ describe('forge http app composition', () => {
     expect(searchInvalid.statusCode).toBe(422);
     expect(search.statusCode).toBe(200);
     expect((search.body as { semantic_fallback: boolean }).semantic_fallback).toBe(false);
+    expect(freshness.statusCode).toBe(200);
+    expect((freshness.body as { sources: unknown[] }).sources).toHaveLength(1);
   });
 
   it('serves install lifecycle plan/apply/update/remove/rollback/verify routes with replay/conflict semantics', async () => {
@@ -440,8 +468,25 @@ describe('forge http app composition', () => {
             package_slug: 'acme/catalog-addon',
             policy_outcome: 'allowed',
             policy_reason_code: null,
+            policy_decision: {
+              outcome: 'allowed',
+              reason_code: null,
+              blocked: false,
+              source: 'policy_preflight'
+            },
             security_state: 'none',
-            action_count: 2
+            action_count: 2,
+            explainability: {
+              why: [
+                'blocked_scope_count=0',
+                'dependency_resolved_count=0',
+                'policy_outcome=allowed',
+                'writable_scope_count=2'
+              ],
+              risk: [],
+              required_actions: [],
+              conflicts: []
+            }
           };
         },
         async getPlan(planId) {
@@ -510,7 +555,13 @@ describe('forge http app composition', () => {
             replayed: idempotencyKey === 'replay',
             plan_id: planId,
             attempt_number: 1,
-            reason_code: null
+            reason_code: null,
+            policy_decision: {
+              outcome: 'allowed',
+              reason_code: null,
+              blocked: false,
+              source: 'policy_preflight'
+            }
           };
         },
         async updatePlan(planId, idempotencyKey, _correlationId, targetVersion) {
@@ -527,7 +578,13 @@ describe('forge http app composition', () => {
             plan_id: planId,
             attempt_number: 1,
             reason_code: null,
-            target_version: targetVersion ?? null
+            target_version: targetVersion ?? null,
+            policy_decision: {
+              outcome: 'allowed',
+              reason_code: null,
+              blocked: false,
+              source: 'policy_preflight'
+            }
           };
         },
         async removePlan(planId, idempotencyKey) {
@@ -543,7 +600,13 @@ describe('forge http app composition', () => {
             replayed: idempotencyKey === 'replay',
             plan_id: planId,
             attempt_number: 1,
-            reason_code: null
+            reason_code: null,
+            policy_decision: {
+              outcome: 'allowed',
+              reason_code: null,
+              blocked: false,
+              source: 'policy_preflight'
+            }
           };
         },
         async rollbackPlan(planId, idempotencyKey) {
@@ -561,7 +624,13 @@ describe('forge http app composition', () => {
             attempt_number: 1,
             reason_code: null,
             rollback_mode: 'cleanup_partial_install',
-            source_operation: 'apply'
+            source_operation: 'apply',
+            policy_decision: {
+              outcome: 'allowed',
+              reason_code: null,
+              blocked: false,
+              source: 'policy_preflight'
+            }
           };
         },
         async verifyPlan(planId, idempotencyKey) {
@@ -585,7 +654,13 @@ describe('forge http app composition', () => {
                 ok: true,
                 details: ['allowed']
               }
-            ]
+            ],
+            policy_decision: {
+              outcome: 'allowed',
+              reason_code: null,
+              blocked: false,
+              source: 'runtime_preflight'
+            }
           };
         }
       }
@@ -733,6 +808,24 @@ describe('forge http app composition', () => {
     expect(invalidCreate.statusCode).toBe(422);
     expect(created.statusCode).toBe(201);
     expect(created.headers['x-idempotent-replay']).toBe('false');
+    expect(
+      (created.body as {
+        policy_decision?: { outcome: string; blocked: boolean };
+        explainability?: { conflicts: unknown[]; required_actions: unknown[] };
+      }).policy_decision
+    ).toEqual({
+      outcome: 'allowed',
+      reason_code: null,
+      blocked: false,
+      source: 'policy_preflight'
+    });
+    expect(
+      (created.body as { explainability?: { conflicts: unknown[]; required_actions: unknown[] } })
+        .explainability
+    ).toMatchObject({
+      conflicts: [],
+      required_actions: []
+    });
     expect(createConflict.statusCode).toBe(409);
     expect(getPlan.statusCode).toBe(200);
     expect(applyReplay.statusCode).toBe(200);
@@ -757,6 +850,388 @@ describe('forge http app composition', () => {
     expect(rollbackReplay.statusCode).toBe(200);
     expect(rollbackReplay.headers['x-idempotent-replay']).toBe('true');
     expect(rollbackMissing.statusCode).toBe(404);
+  });
+
+  it('maps install lifecycle conflict and invalid-state failure classes for every mutating endpoint', async () => {
+    const app = createForgeHttpApp({
+      eventIngestion: createInMemoryEventDependencies(),
+      securityIngestion: {
+        reporters: new InMemoryReporterDirectory({}),
+        nonceStore: new InMemoryReporterNonceStore(),
+        persistence: new InMemorySecurityReportStore(),
+        signatureVerifier: {
+          async verify() {
+            return true;
+          }
+        }
+      },
+      installLifecycle: {
+        async createPlan(request, idempotencyKey) {
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+          if (request.package_id === 'pkg-missing') {
+            throw new Error('package_not_found');
+          }
+          if (request.package_id === 'pkg-dep-fail') {
+            throw new Error('dependency_resolution_failed: cycle_detected');
+          }
+
+          return {
+            status: 'planned',
+            replayed: false,
+            plan_id: 'plan-http-errors',
+            package_id: request.package_id,
+            package_slug: request.package_slug ?? 'acme/errors-addon',
+            policy_outcome: 'allowed',
+            policy_reason_code: null,
+            security_state: 'none',
+            action_count: 1
+          };
+        },
+        async getPlan() {
+          return null;
+        },
+        async applyPlan(planId, idempotencyKey) {
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+
+          return {
+            status: 'apply_succeeded',
+            replayed: false,
+            plan_id: planId,
+            attempt_number: 1,
+            reason_code: null
+          };
+        },
+        async updatePlan(planId, idempotencyKey) {
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+          if (planId === 'state') {
+            throw new Error('update_invalid_plan_state');
+          }
+
+          return {
+            status: 'update_succeeded',
+            replayed: false,
+            plan_id: planId,
+            attempt_number: 1,
+            reason_code: null,
+            target_version: null
+          };
+        },
+        async removePlan(planId, idempotencyKey) {
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+          if (planId === 'state') {
+            throw new Error('remove_invalid_plan_state');
+          }
+          if (planId === 'dependency') {
+            throw new Error('remove_dependency_blocked');
+          }
+
+          return {
+            status: 'remove_succeeded',
+            replayed: false,
+            plan_id: planId,
+            attempt_number: 1,
+            reason_code: null
+          };
+        },
+        async rollbackPlan(planId, idempotencyKey) {
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+          if (planId === 'state') {
+            throw new Error('rollback_invalid_plan_state');
+          }
+          if (planId === 'source') {
+            throw new Error('rollback_source_attempt_missing');
+          }
+
+          return {
+            status: 'rollback_succeeded',
+            replayed: false,
+            plan_id: planId,
+            attempt_number: 1,
+            reason_code: null,
+            rollback_mode: 'cleanup_partial_install',
+            source_operation: 'apply'
+          };
+        },
+        async verifyPlan(planId, idempotencyKey) {
+          if (idempotencyKey === 'conflict') {
+            throw new Error('idempotency_conflict');
+          }
+          if (planId === 'missing') {
+            throw new Error('plan_not_found');
+          }
+
+          return {
+            status: 'verify_succeeded',
+            replayed: false,
+            plan_id: planId,
+            attempt_number: 1,
+            readiness: true,
+            reason_code: null,
+            stages: []
+          };
+        }
+      }
+    });
+
+    const invalidTrustState = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-ok',
+        org_id: 'org-errors',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: { maxPermissions: 5, disallowedPermissions: [] }
+        },
+        trust_state: 'invalid'
+      }
+    });
+    expect(invalidTrustState.statusCode).toBe(422);
+    expect((invalidTrustState.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.trustStateInvalid
+    );
+
+    const invalidTrustResetTrigger = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-ok',
+        org_id: 'org-errors',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: { maxPermissions: 5, disallowedPermissions: [] }
+        },
+        trust_reset_trigger: 'invalid'
+      }
+    });
+    expect(invalidTrustResetTrigger.statusCode).toBe(422);
+    expect((invalidTrustResetTrigger.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.trustResetTriggerInvalid
+    );
+
+    const invalidRequestedPermissions = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-ok',
+        org_id: 'org-errors',
+        requested_permissions: ['read:config', 42],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: { maxPermissions: 5, disallowedPermissions: [] }
+        }
+      }
+    });
+    expect(invalidRequestedPermissions.statusCode).toBe(422);
+    expect((invalidRequestedPermissions.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingRequiredFields
+    );
+
+    const createConflict = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: { 'idempotency-key': 'conflict' },
+      body: {
+        package_id: 'pkg-ok',
+        org_id: 'org-errors',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: { maxPermissions: 5, disallowedPermissions: [] }
+        }
+      }
+    });
+    expect(createConflict.statusCode).toBe(409);
+    expect((createConflict.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
+    );
+
+    const createMissingPackage = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-missing',
+        org_id: 'org-errors',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: { maxPermissions: 5, disallowedPermissions: [] }
+        }
+      }
+    });
+    expect(createMissingPackage.statusCode).toBe(404);
+    expect((createMissingPackage.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.packageNotFound
+    );
+
+    const createDependencyFailure = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans',
+      headers: {},
+      body: {
+        package_id: 'pkg-dep-fail',
+        org_id: 'org-errors',
+        requested_permissions: [],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [],
+          block_flagged: false,
+          permission_caps: { maxPermissions: 5, disallowedPermissions: [] }
+        }
+      }
+    });
+    expect(createDependencyFailure.statusCode).toBe(422);
+    expect((createDependencyFailure.body as { status: string }).status).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.dependencyResolutionFailed
+    );
+
+    const applyConflict = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-errors/apply',
+      headers: { 'idempotency-key': 'conflict' },
+      body: null
+    });
+    expect(applyConflict.statusCode).toBe(409);
+    expect((applyConflict.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
+    );
+
+    const updateInvalidState = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/state/update',
+      headers: {},
+      body: null
+    });
+    expect(updateInvalidState.statusCode).toBe(422);
+    expect((updateInvalidState.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.updateInvalidPlanState
+    );
+
+    const updateConflict = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-errors/update',
+      headers: { 'idempotency-key': 'conflict' },
+      body: null
+    });
+    expect(updateConflict.statusCode).toBe(409);
+    expect((updateConflict.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
+    );
+
+    const removeInvalidState = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/state/remove',
+      headers: {},
+      body: null
+    });
+    expect(removeInvalidState.statusCode).toBe(422);
+    expect((removeInvalidState.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.removeInvalidPlanState
+    );
+
+    const removeDependencyBlocked = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/dependency/remove',
+      headers: {},
+      body: null
+    });
+    expect(removeDependencyBlocked.statusCode).toBe(409);
+    expect((removeDependencyBlocked.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.removeDependencyBlocked
+    );
+
+    const removeConflict = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-errors/remove',
+      headers: { 'idempotency-key': 'conflict' },
+      body: null
+    });
+    expect(removeConflict.statusCode).toBe(409);
+    expect((removeConflict.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
+    );
+
+    const rollbackInvalidState = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/state/rollback',
+      headers: {},
+      body: null
+    });
+    expect(rollbackInvalidState.statusCode).toBe(422);
+    expect((rollbackInvalidState.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.rollbackInvalidPlanState
+    );
+
+    const rollbackMissingSource = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/source/rollback',
+      headers: {},
+      body: null
+    });
+    expect(rollbackMissingSource.statusCode).toBe(409);
+    expect((rollbackMissingSource.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.rollbackSourceAttemptMissing
+    );
+
+    const rollbackConflict = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-errors/rollback',
+      headers: { 'idempotency-key': 'conflict' },
+      body: null
+    });
+    expect(rollbackConflict.statusCode).toBe(409);
+    expect((rollbackConflict.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
+    );
+
+    const verifyConflict = await app.handle({
+      method: 'POST',
+      path: '/v1/install/plans/plan-http-errors/verify',
+      headers: { 'idempotency-key': 'conflict' },
+      body: null
+    });
+    expect(verifyConflict.statusCode).toBe(409);
+    expect((verifyConflict.body as { reason: string }).reason).toBe(
+      INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
+    );
   });
 
   it('validates and forwards dependency resolution payloads on plan create', async () => {

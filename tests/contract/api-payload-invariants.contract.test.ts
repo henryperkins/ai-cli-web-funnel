@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { evaluatePolicyPreflight } from '@forge/policy-engine';
 import { evaluateSecurityReportValidation } from '@forge/security-governance';
-import { validateTelemetryEventEnvelope } from '@forge/shared-contracts';
+import {
+  INSTALL_PLAN_CONFLICT_CODES,
+  validateTelemetryEventEnvelope
+} from '@forge/shared-contracts';
 
 describe('contract: API payload invariants', () => {
   it('enforces event envelope required fields', () => {
@@ -64,5 +67,17 @@ describe('contract: API payload invariants', () => {
     expect(result.accepted).toBe(false);
     expect(result.reason_code).toBe('evidence_minimums_missing');
     expect(result.queue).toBe('rejected');
+  });
+
+  it('enforces stable lifecycle conflict taxonomy ordering for API payload contracts', () => {
+    expect(INSTALL_PLAN_CONFLICT_CODES).toEqual([
+      'dependency_cycle',
+      'dependency_missing',
+      'dependency_duplicate',
+      'version_incompatible',
+      'capability_incompatible',
+      'runtime_incompatible',
+      'policy_blocked'
+    ]);
   });
 });

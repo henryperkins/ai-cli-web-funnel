@@ -207,6 +207,53 @@ function createRuntimeVerifierStub(): {
   };
 }
 
+function createNoScopeAdapter(): CopilotAdapterContract {
+  const blockedPolicy: PolicyPreflightResult = {
+    outcome: 'policy_blocked',
+    reason_code: 'org_policy_blocked',
+    install_allowed: false,
+    runtime_allowed: false,
+    trust_transition: 'lockdown',
+    warnings: []
+  };
+
+  return {
+    async discover_scopes() {
+      return [];
+    },
+    async read_entry() {
+      return null;
+    },
+    async write_entry() {
+      return;
+    },
+    async remove_entry() {
+      return;
+    },
+    async policy_preflight() {
+      return blockedPolicy;
+    },
+    lifecycle_hooks: {
+      async on_before_write() {
+        return;
+      },
+      async on_after_write() {
+        return;
+      },
+      async on_lifecycle() {
+        return;
+      },
+      async on_health_check() {
+        return {
+          healthy: true,
+          details: []
+        };
+      }
+    },
+    remote_hooks: {}
+  };
+}
+
 describe('install lifecycle dependency resolution', () => {
   it('adds deterministic dependency resolution summary to createPlan response', async () => {
     const service = createInstallLifecycleService({
@@ -262,6 +309,14 @@ describe('install lifecycle dependency resolution', () => {
     ]);
     expect(response.dependency_resolution?.resolved_count).toBe(3);
     expect(response.dependency_resolution?.conflicts).toEqual([]);
+    expect(response.policy_decision).toEqual({
+      outcome: 'allowed',
+      reason_code: null,
+      blocked: false,
+      source: 'policy_preflight'
+    });
+    expect(response.explainability?.conflicts).toEqual([]);
+    expect(response.explainability?.required_actions).toEqual([]);
   });
 
   it('fails createPlan with deterministic taxonomy on cycle', async () => {
@@ -308,5 +363,84 @@ describe('install lifecycle dependency resolution', () => {
         'idem-dep-test-002'
       )
     ).rejects.toThrow(/dependency_resolution_failed:/);
+  });
+
+  it('populates explainability payload with deterministic conflict ordering', async () => {
+    const service = createInstallLifecycleService({
+      db: new CreatePlanFakeDb(),
+      copilotAdapter: createNoScopeAdapter(),
+      runtimeVerifier: createRuntimeVerifierStub(),
+      idempotency: createInMemoryIdempotency(),
+      policyPreflight: {
+        async preflight() {
+          return {
+            outcome: 'policy_blocked',
+            reason_code: 'org_policy_blocked',
+            install_allowed: false,
+            runtime_allowed: false,
+            trust_transition: 'lockdown',
+            warnings: []
+          };
+        }
+      },
+      idFactory: () => 'plan-dep-test-003',
+      now: () => new Date('2026-03-01T12:00:00Z')
+    });
+
+    const response = await service.createPlan(
+      {
+        package_id: ROOT_PACKAGE_ID,
+        package_slug: 'acme/root-addon',
+        org_id: 'org-dep-test',
+        requested_permissions: ['read:config', 'write:settings'],
+        org_policy: {
+          mcp_enabled: true,
+          server_allowlist: [ROOT_PACKAGE_ID, DEP_A],
+          block_flagged: true,
+          permission_caps: {
+            maxPermissions: 1,
+            disallowedPermissions: ['write:settings']
+          }
+        },
+        dependency_edges: [
+          {
+            from_package_id: ROOT_PACKAGE_ID,
+            to_package_id: DEP_A,
+            constraint: '^1.0.0',
+            required: true
+          },
+          {
+            from_package_id: ROOT_PACKAGE_ID,
+            to_package_id: DEP_A,
+            constraint: '^2.0.0',
+            required: true
+          }
+        ],
+        known_package_ids: [ROOT_PACKAGE_ID, DEP_A]
+      },
+      'idem-dep-test-003'
+    );
+
+    expect(response.policy_decision).toEqual({
+      outcome: 'policy_blocked',
+      reason_code: 'org_policy_blocked',
+      blocked: true,
+      source: 'policy_preflight'
+    });
+    expect(response.explainability?.conflicts.map((conflict) => conflict.code)).toEqual([
+      'capability_incompatible',
+      'capability_incompatible',
+      'dependency_duplicate',
+      'policy_blocked',
+      'runtime_incompatible',
+      'version_incompatible'
+    ]);
+    expect(response.explainability?.required_actions).toEqual([
+      'Adjust requested permissions to satisfy policy caps and disallowed-permission rules.',
+      'Ensure at least one approved writable runtime scope is available for the target client.',
+      'Remove duplicate dependency edges to avoid ambiguous resolution order.',
+      'Resolve conflicting dependency version constraints before creating a plan.',
+      'Review org policy/security enforcement and resolve blocking reason codes before apply.'
+    ]);
   });
 });

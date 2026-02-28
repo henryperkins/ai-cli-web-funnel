@@ -3,7 +3,7 @@
 Stories: `E2-S2`, `E2-S3`
 Owner: Catalog + Data Platform
 Priority: `P0`
-Status: Not Started
+Status: Done (2026-02-28)
 
 ## Objective
 

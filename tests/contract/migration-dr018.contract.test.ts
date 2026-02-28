@@ -9,5 +9,7 @@ describe('contract: DR-018 migration verification', () => {
     expect(result.checks.find((check) => check.name === 'compatibility view bridge for public.registry_packages')?.pass).toBe(true);
     expect(result.checks.find((check) => check.name === 'canonical table relation registry.packages')?.pass).toBe(true);
     expect(result.checks.find((check) => check.name === 'idempotent rerun guardrails present in cutover migration')?.pass).toBe(true);
+    expect(result.checks.find((check) => check.name === 'migration PR template includes lock risk, rollback, and reviewer sign-off sections')?.pass).toBe(true);
+    expect(result.checks.find((check) => check.name === 'cron go-live checklist includes dry-run, shadow, production, and replay evidence gates')?.pass).toBe(true);
   });
 });

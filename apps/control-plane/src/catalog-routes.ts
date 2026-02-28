@@ -1,8 +1,10 @@
 import { scorePackageV0, type RetrievalSearchResult } from '@forge/ranking';
 import type {
+  CatalogPackageFreshnessRecord,
   CatalogPackageDetail,
   CatalogPackageListItem,
-  CatalogPostgresAdapters
+  CatalogPostgresAdapters,
+  CatalogSourceFreshnessRecord
 } from '@forge/catalog/postgres-adapters';
 
 export interface CatalogSearchRequest {
@@ -38,6 +40,15 @@ export interface CatalogSearchResponse {
   query: string;
   semantic_fallback: boolean;
   results: CatalogSearchResultItem[];
+}
+
+export interface CatalogFreshnessResponse {
+  generated_at: string;
+  sources: CatalogSourceFreshnessRecord[];
+}
+
+export interface CatalogPackageDetailResponse extends CatalogPackageDetail {
+  freshness: CatalogPackageFreshnessRecord | null;
 }
 
 export interface CatalogRouteDependencies {
@@ -217,8 +228,31 @@ export function createCatalogRouteService(dependencies: CatalogRouteDependencies
       return dependencies.catalog.listPackages(normalizeLimit(limit), Math.max(0, offset));
     },
 
-    async getPackage(packageId: string): Promise<CatalogPackageDetail | null> {
-      return dependencies.catalog.getPackage(packageId);
+    async getPackage(packageId: string): Promise<CatalogPackageDetailResponse | null> {
+      const detail = await dependencies.catalog.getPackage(packageId);
+      if (!detail) {
+        return null;
+      }
+
+      const freshness = dependencies.catalog.getPackageFreshness
+        ? await dependencies.catalog.getPackageFreshness(packageId)
+        : null;
+
+      return {
+        ...detail,
+        freshness
+      };
+    },
+
+    async getFreshnessStatus(): Promise<CatalogFreshnessResponse> {
+      const sources = dependencies.catalog.listSourceFreshness
+        ? await dependencies.catalog.listSourceFreshness()
+        : [];
+
+      return {
+        generated_at: new Date().toISOString(),
+        sources
+      };
     },
 
     async searchPackages(request: CatalogSearchRequest): Promise<CatalogSearchResponse> {

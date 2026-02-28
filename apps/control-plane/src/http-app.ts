@@ -2,6 +2,15 @@ import { createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createCatalogPostgresAdapters } from '@forge/catalog/postgres-adapters';
 import {
+  INSTALL_LIFECYCLE_HTTP_ERROR_REASON,
+  isInstallTrustResetTrigger,
+  isInstallTrustState,
+  type DependencyEdge,
+  type InstallLifecycleCreatePlanRequest,
+  type InstallTrustResetTrigger,
+  type InstallTrustState
+} from '@forge/shared-contracts';
+import {
   createSignedReporterIngestionHttpHandler
 } from '@forge/security-governance/http-handler';
 import type {
@@ -10,9 +19,13 @@ import type {
   SignedReporterIngestionOptions
 } from '@forge/security-governance';
 import {
+  createSecurityRolloutModeResolver
+} from '@forge/security-governance';
+import {
   createPostgresReporterDirectory,
   createPostgresReporterNonceStore,
   createPostgresSecurityEnforcementStore,
+  createPostgresSecurityRolloutStateStore,
   createPostgresSecurityOutboxPublisher,
   createPostgresSecurityReportStore,
   type PostgresQueryExecutor as SecurityPostgresQueryExecutor
@@ -223,12 +236,12 @@ function asStringArray(value: unknown): string[] | null {
 
 function asDependencyEdges(
   value: unknown
-): import('@forge/shared-contracts').DependencyEdge[] | null {
+): DependencyEdge[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
 
-  const output: import('@forge/shared-contracts').DependencyEdge[] = [];
+  const output: DependencyEdge[] = [];
   for (const rawEdge of value) {
     const edge = asObject(rawEdge);
     if (!edge) {
@@ -335,6 +348,18 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         });
       }
 
+      if (request.method === 'GET' && path === '/v1/packages/freshness') {
+        if (!dependencies.catalogRoutes) {
+          return jsonResponse(503, {
+            status: 'not_ready',
+            reason: 'catalog_routes_unavailable'
+          });
+        }
+
+        const freshness = await dependencies.catalogRoutes.getFreshnessStatus();
+        return jsonResponse(200, freshness);
+      }
+
       if (request.method === 'GET' && /^\/v1\/packages\/[^/]+$/i.test(path)) {
         if (!dependencies.catalogRoutes) {
           return jsonResponse(503, {
@@ -392,7 +417,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
-            reason: 'install_lifecycle_unavailable'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.installLifecycleUnavailable
           });
         }
 
@@ -400,7 +425,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!body) {
           return jsonResponse(422, {
             status: 'invalid_request',
-            reason: 'body_object_required'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.bodyObjectRequired
           });
         }
 
@@ -415,17 +440,25 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         ) {
           return jsonResponse(422, {
             status: 'invalid_request',
-            reason: 'missing_required_fields'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingRequiredFields
           });
         }
 
-        let dependencyEdges: import('@forge/shared-contracts').DependencyEdge[] | undefined;
+        const requestedPermissions = asStringArray(body.requested_permissions);
+        if (requestedPermissions === null) {
+          return jsonResponse(422, {
+            status: 'invalid_request',
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingRequiredFields
+          });
+        }
+
+        let dependencyEdges: DependencyEdge[] | undefined;
         if (body.dependency_edges !== undefined) {
           const parsedDependencyEdges = asDependencyEdges(body.dependency_edges);
           if (parsedDependencyEdges === null) {
             return jsonResponse(422, {
               status: 'invalid_request',
-              reason: 'dependency_edges_invalid'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.dependencyEdgesInvalid
             });
           }
 
@@ -438,61 +471,75 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           if (parsedKnownPackageIds === null) {
             return jsonResponse(422, {
               status: 'invalid_request',
-              reason: 'known_package_ids_invalid'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.knownPackageIdsInvalid
             });
           }
 
           knownPackageIds = parsedKnownPackageIds;
         }
 
+        const trustStateInput = body.trust_state;
+        if (
+          trustStateInput !== undefined &&
+          (typeof trustStateInput !== 'string' || !isInstallTrustState(trustStateInput))
+        ) {
+          return jsonResponse(422, {
+            status: 'invalid_request',
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.trustStateInvalid
+          });
+        }
+
+        const trustResetTriggerInput = body.trust_reset_trigger;
+        if (
+          trustResetTriggerInput !== undefined &&
+          (typeof trustResetTriggerInput !== 'string' ||
+            !isInstallTrustResetTrigger(trustResetTriggerInput))
+        ) {
+          return jsonResponse(422, {
+            status: 'invalid_request',
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.trustResetTriggerInvalid
+          });
+        }
+
         try {
           const correlationId = resolveCorrelationId(request.headers);
-          const response = await dependencies.installLifecycle.createPlan(
-            {
-              package_id: body.package_id,
-              ...(typeof body.package_slug === 'string'
-                ? { package_slug: body.package_slug }
-                : {}),
-              ...(correlationId ? { correlation_id: correlationId } : {}),
-              org_id: body.org_id,
-              requested_permissions: body.requested_permissions
-                .filter((entry): entry is string => typeof entry === 'string'),
-              org_policy: body.org_policy as {
-                mcp_enabled: boolean;
-                server_allowlist: string[];
-                block_flagged: boolean;
-                permission_caps: {
-                  maxPermissions: number;
-                  disallowedPermissions: string[];
-                };
-              },
-              ...(typeof body.trust_state === 'string'
-                ? {
-                    trust_state: body.trust_state as
-                      | 'untrusted'
-                      | 'trusted'
-                      | 'trust_expired'
-                      | 'denied'
-                      | 'policy_blocked'
-                  }
-                : {}),
-              ...(typeof body.trust_reset_trigger === 'string'
-                ? {
-                    trust_reset_trigger: body.trust_reset_trigger as
-                      | 'major_version_bump'
-                      | 'author_changed'
-                      | 'permission_escalation'
-                      | 'user_revoked'
-                      | 'none'
-                  }
-                : {}),
-              ...(dependencyEdges !== undefined
-                ? { dependency_edges: dependencyEdges }
-                : {}),
-              ...(knownPackageIds !== undefined
-                ? { known_package_ids: knownPackageIds }
-                : {})
+          const createPlanRequest: InstallLifecycleCreatePlanRequest = {
+            package_id: body.package_id,
+            ...(typeof body.package_slug === 'string'
+              ? { package_slug: body.package_slug }
+              : {}),
+            ...(correlationId ? { correlation_id: correlationId } : {}),
+            org_id: body.org_id,
+            requested_permissions: requestedPermissions,
+            org_policy: body.org_policy as {
+              mcp_enabled: boolean;
+              server_allowlist: string[];
+              block_flagged: boolean;
+              permission_caps: {
+                maxPermissions: number;
+                disallowedPermissions: string[];
+              };
             },
+            ...(trustStateInput !== undefined
+              ? {
+                  trust_state: trustStateInput as InstallTrustState
+                }
+              : {}),
+            ...(trustResetTriggerInput !== undefined
+              ? {
+                  trust_reset_trigger: trustResetTriggerInput as InstallTrustResetTrigger
+                }
+              : {}),
+            ...(dependencyEdges !== undefined
+              ? { dependency_edges: dependencyEdges }
+              : {}),
+            ...(knownPackageIds !== undefined
+              ? { known_package_ids: knownPackageIds }
+              : {})
+          };
+
+          const response = await dependencies.installLifecycle.createPlan(
+            createPlanRequest,
             idempotencyKey
           );
 
@@ -503,20 +550,20 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           if (error instanceof Error && error.message.includes('idempotency_conflict')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'idempotency_key_reused_with_different_payload'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
             });
           }
 
           if (error instanceof Error && error.message.includes('package_not_found')) {
             return jsonResponse(404, {
               status: 'not_found',
-              reason: 'package_not_found'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.packageNotFound
             });
           }
 
           if (error instanceof Error && error.message.includes('dependency_resolution_failed:')) {
             return jsonResponse(422, {
-              status: 'dependency_resolution_failed',
+              status: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.dependencyResolutionFailed,
               reason: error.message
             });
           }
@@ -529,7 +576,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
-            reason: 'install_lifecycle_unavailable'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.installLifecycleUnavailable
           });
         }
 
@@ -537,7 +584,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
-            reason: 'missing_plan_id'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingPlanId
           });
         }
 
@@ -545,7 +592,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!plan) {
           return jsonResponse(404, {
             status: 'not_found',
-            reason: 'plan_not_found'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.planNotFound
           });
         }
 
@@ -559,7 +606,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
-            reason: 'install_lifecycle_unavailable'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.installLifecycleUnavailable
           });
         }
 
@@ -567,7 +614,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
-            reason: 'missing_plan_id'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingPlanId
           });
         }
 
@@ -585,14 +632,14 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           if (error instanceof Error && error.message.includes('idempotency_conflict')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'idempotency_key_reused_with_different_payload'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
             });
           }
 
           if (error instanceof Error && error.message.includes('plan_not_found')) {
             return jsonResponse(404, {
               status: 'not_found',
-              reason: 'plan_not_found'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.planNotFound
             });
           }
 
@@ -607,7 +654,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
-            reason: 'install_lifecycle_unavailable'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.installLifecycleUnavailable
           });
         }
 
@@ -615,7 +662,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
-            reason: 'missing_plan_id'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingPlanId
           });
         }
 
@@ -623,7 +670,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (request.body !== null && body === null) {
           return jsonResponse(422, {
             status: 'invalid_request',
-            reason: 'body_object_required'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.bodyObjectRequired
           });
         }
 
@@ -634,7 +681,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         ) {
           return jsonResponse(422, {
             status: 'invalid_request',
-            reason: 'target_version_invalid'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.targetVersionInvalid
           });
         }
 
@@ -653,21 +700,21 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           if (error instanceof Error && error.message.includes('idempotency_conflict')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'idempotency_key_reused_with_different_payload'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
             });
           }
 
           if (error instanceof Error && error.message.includes('plan_not_found')) {
             return jsonResponse(404, {
               status: 'not_found',
-              reason: 'plan_not_found'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.planNotFound
             });
           }
 
           if (error instanceof Error && error.message.includes('update_invalid_plan_state')) {
             return jsonResponse(422, {
               status: 'invalid_request',
-              reason: 'update_invalid_plan_state'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.updateInvalidPlanState
             });
           }
 
@@ -682,7 +729,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
-            reason: 'install_lifecycle_unavailable'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.installLifecycleUnavailable
           });
         }
 
@@ -690,7 +737,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
-            reason: 'missing_plan_id'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingPlanId
           });
         }
 
@@ -708,28 +755,28 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           if (error instanceof Error && error.message.includes('idempotency_conflict')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'idempotency_key_reused_with_different_payload'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
             });
           }
 
           if (error instanceof Error && error.message.includes('plan_not_found')) {
             return jsonResponse(404, {
               status: 'not_found',
-              reason: 'plan_not_found'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.planNotFound
             });
           }
 
           if (error instanceof Error && error.message.includes('remove_invalid_plan_state')) {
             return jsonResponse(422, {
               status: 'invalid_request',
-              reason: 'remove_invalid_plan_state'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.removeInvalidPlanState
             });
           }
 
           if (error instanceof Error && error.message.includes('remove_dependency_blocked')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'remove_dependency_blocked'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.removeDependencyBlocked
             });
           }
 
@@ -744,7 +791,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
-            reason: 'install_lifecycle_unavailable'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.installLifecycleUnavailable
           });
         }
 
@@ -752,7 +799,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
-            reason: 'missing_plan_id'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingPlanId
           });
         }
 
@@ -770,28 +817,28 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           if (error instanceof Error && error.message.includes('idempotency_conflict')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'idempotency_key_reused_with_different_payload'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
             });
           }
 
           if (error instanceof Error && error.message.includes('plan_not_found')) {
             return jsonResponse(404, {
               status: 'not_found',
-              reason: 'plan_not_found'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.planNotFound
             });
           }
 
           if (error instanceof Error && error.message.includes('rollback_invalid_plan_state')) {
             return jsonResponse(422, {
               status: 'invalid_request',
-              reason: 'rollback_invalid_plan_state'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.rollbackInvalidPlanState
             });
           }
 
           if (error instanceof Error && error.message.includes('rollback_source_attempt_missing')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'rollback_source_attempt_missing'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.rollbackSourceAttemptMissing
             });
           }
 
@@ -806,7 +853,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!dependencies.installLifecycle) {
           return jsonResponse(503, {
             status: 'not_ready',
-            reason: 'install_lifecycle_unavailable'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.installLifecycleUnavailable
           });
         }
 
@@ -814,7 +861,7 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         if (!planId) {
           return jsonResponse(400, {
             status: 'invalid_request',
-            reason: 'missing_plan_id'
+            reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.missingPlanId
           });
         }
 
@@ -832,14 +879,14 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
           if (error instanceof Error && error.message.includes('idempotency_conflict')) {
             return jsonResponse(409, {
               status: 'conflict',
-              reason: 'idempotency_key_reused_with_different_payload'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.idempotencyKeyPayloadConflict
             });
           }
 
           if (error instanceof Error && error.message.includes('plan_not_found')) {
             return jsonResponse(404, {
               status: 'not_found',
-              reason: 'plan_not_found'
+              reason: INSTALL_LIFECYCLE_HTTP_ERROR_REASON.planNotFound
             });
           }
 
@@ -1115,11 +1162,18 @@ export function createForgeHttpAppFromPostgres(
       db: dependencies.db
     });
 
+  const rolloutStateStore = createPostgresSecurityRolloutStateStore({
+    db: dependencies.db
+  });
+
   const securityIngestion: SignedReporterIngestionDependencies = {
     reporters: createPostgresReporterDirectory({ db: dependencies.db }),
     nonceStore: createPostgresReporterNonceStore({ db: dependencies.db }),
     persistence: createPostgresSecurityReportStore({ db: dependencies.db }),
     projectionStore: createPostgresSecurityEnforcementStore({ db: dependencies.db }),
+    rolloutModeResolver: createSecurityRolloutModeResolver({
+      rolloutStateStore
+    }),
     outboxPublisher: createPostgresSecurityOutboxPublisher({ db: dependencies.db }),
     signatureVerifier,
     ...(dependencies.idFactory ? { idFactory: dependencies.idFactory } : {})

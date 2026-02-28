@@ -417,6 +417,12 @@ describe('e2e local: discover -> plan -> install -> verify', () => {
               }
             ]
           };
+        },
+        async getFreshnessStatus() {
+          return {
+            generated_at: '2026-03-01T00:00:00Z',
+            sources: []
+          };
         }
       },
       installLifecycle: lifecycle

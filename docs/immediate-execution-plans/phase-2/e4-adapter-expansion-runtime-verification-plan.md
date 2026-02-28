@@ -3,7 +3,7 @@
 Stories: `E4-S1`, `E4-S2`, `E4-S3`, `E4-S4`
 Owner: Runtime + Adapter Team
 Priority: `P0`
-Status: Not Started
+Status: Done (2026-02-28; GA scope lock = `vscode_copilot` + `local` + `stdio`)
 
 ## Objective
 

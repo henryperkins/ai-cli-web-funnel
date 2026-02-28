@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { createCatalogIngestService } from '../../packages/catalog/src/index.js';
 import { createCatalogPostgresAdapters } from '../../packages/catalog/src/postgres-adapters.js';
+import { createCatalogRouteService } from '../../apps/control-plane/src/catalog-routes.js';
 import { createCopilotVscodeAdapterContract } from '../../apps/copilot-vscode-adapter/src/index.js';
 import {
   createInstallLifecycleService,
@@ -138,6 +139,110 @@ describe('integration-db: catalog ingest and install lifecycle persistence', () 
       'SELECT COUNT(*)::text AS count FROM package_identity_conflicts'
     );
     expect(conflicts.rows[0]?.count).toBe('1');
+  });
+
+  it('persists reconciliation freshness metadata and exposes package freshness read model', async () => {
+    const ingestService = createCatalogIngestService();
+    const adapters = createCatalogPostgresAdapters({ db });
+
+    const accepted = ingestService.ingest({
+      merge_run_id: 'merge-docs-001',
+      occurred_at: '2026-03-01T10:00:00Z',
+      source_snapshot: {
+        source: 'docs'
+      },
+      candidates: [
+        {
+          source_name: 'docs',
+          source_updated_at: '2026-03-01T09:50:00Z',
+          registry_package_locator: 'https://docs.example.com/acme/docs-addon',
+          github_repo_locator: 'https://github.com/acme/docs-addon',
+          tool_kind: 'mcp',
+          package_slug: 'acme/docs-addon',
+          fields: {
+            name: 'Docs Addon',
+            description: 'from docs',
+            lastUpdated: '2026-03-01T09:50:00Z'
+          },
+          aliases: [
+            {
+              alias_type: 'url_alias',
+              alias_value: 'https://docs.example.com/acme/docs-addon'
+            }
+          ]
+        }
+      ]
+    });
+
+    await adapters.persistIngestResult(accepted);
+
+    const packageId = accepted.package_candidate?.package_id;
+    if (!packageId) {
+      throw new Error('expected package candidate package_id');
+    }
+
+    await adapters.recordSourceFreshness?.({
+      source_name: 'docs',
+      status: 'succeeded',
+      stale_after_minutes: 1440,
+      last_attempt_at: '2026-03-01T10:00:00Z',
+      last_success_at: '2026-03-01T10:00:00Z',
+      merge_run_id: 'merge-docs-001',
+      failure_class: null,
+      failure_message: null
+    });
+
+    const firstRunWrite = await adapters.recordReconciliationRun?.({
+      run_id: 'reconcile-docs-001',
+      run_hash: 'hash-docs-001',
+      source_name: 'docs',
+      mode: 'apply',
+      status: 'succeeded',
+      attempts: 1,
+      merge_run_id: 'merge-docs-001',
+      started_at: '2026-03-01T10:00:00Z',
+      completed_at: '2026-03-01T10:00:10Z',
+      details: {
+        source: 'docs'
+      }
+    });
+    const replayRunWrite = await adapters.recordReconciliationRun?.({
+      run_id: 'reconcile-docs-001',
+      run_hash: 'hash-docs-001',
+      source_name: 'docs',
+      mode: 'apply',
+      status: 'succeeded',
+      attempts: 1,
+      merge_run_id: 'merge-docs-001',
+      started_at: '2026-03-01T10:00:00Z',
+      completed_at: '2026-03-01T10:00:10Z',
+      details: {
+        source: 'docs'
+      }
+    });
+
+    expect(firstRunWrite?.replayed).toBe(false);
+    expect(replayRunWrite?.replayed).toBe(true);
+
+    const sourceFreshness = await adapters.listSourceFreshness?.();
+    expect(sourceFreshness).toHaveLength(1);
+    expect(sourceFreshness?.[0]).toMatchObject({
+      source_name: 'docs',
+      status: 'succeeded',
+      merge_run_id: 'merge-docs-001'
+    });
+
+    const packageFreshness = await adapters.getPackageFreshness?.(packageId);
+    expect(packageFreshness?.package_id).toBe(packageId);
+    expect(packageFreshness?.last_ingested_at).not.toBeNull();
+    expect(packageFreshness?.source_statuses[0]?.source_name).toBe('docs');
+
+    const routes = createCatalogRouteService({ catalog: adapters });
+    const detail = await routes.getPackage(packageId);
+    const freshnessStatus = await routes.getFreshnessStatus();
+
+    expect(detail?.freshness?.package_id).toBe(packageId);
+    expect(freshnessStatus.sources[0]?.source_name).toBe('docs');
   });
 
   it('persists plan/create/apply/verify lifecycle attempts and supports idempotent replay', async () => {
@@ -353,6 +458,229 @@ describe('integration-db: catalog ingest and install lifecycle persistence', () 
       apply_attempts: '1',
       verify_attempts: '1',
       outbox_count: '4'
+    });
+
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it('persists remove/rollback transitions with audit + outbox continuity', async () => {
+    const packageId = '8f0d6b7e-884f-4c8f-871e-aabbccddeeff';
+    await seedPackage(pool, packageId);
+
+    const workspace = await mkdtemp(join(tmpdir(), 'forge-lifecycle-remove-rb-intg-'));
+    const copilotAdapter = createCopilotVscodeAdapterContract(
+      {
+        async preflight() {
+          return {
+            outcome: 'allowed',
+            install_allowed: true,
+            runtime_allowed: true,
+            reason_code: null,
+            warnings: [],
+            policy_blocked: false,
+            blocked_by: 'none'
+          };
+        }
+      },
+      {
+        async on_before_write() {
+          return;
+        },
+        async on_after_write() {
+          return;
+        },
+        async on_lifecycle() {
+          return;
+        },
+        async on_health_check() {
+          return { healthy: true, details: ['ok'] };
+        }
+      },
+      {},
+      {
+        workspaceRoot: workspace,
+        userProfilePath: join(workspace, 'user-profile.json'),
+        daemonDefaultPath: join(workspace, 'daemon-default.json'),
+        now: () => new Date('2026-03-01T15:00:00Z')
+      }
+    );
+
+    let planCounter = 1;
+    const lifecycle = createInstallLifecycleService({
+      db,
+      copilotAdapter,
+      runtimeVerifier: {
+        async run(request) {
+          return {
+            ready: true,
+            failure_reason_code: null,
+            final_trust_state: 'trusted',
+            policy: {
+              outcome: 'allowed',
+              install_allowed: true,
+              runtime_allowed: true,
+              reason_code: null,
+              warnings: [],
+              policy_blocked: false,
+              blocked_by: 'none'
+            },
+            scope_resolution: {
+              ordered_writable_scopes: request.scope_candidates,
+              blocked_scopes: []
+            },
+            stages: []
+          };
+        },
+        async writeScopeSidecarGuarded() {
+          return {
+            ok: true,
+            reason_code: null
+          };
+        }
+      },
+      idempotency: createPostgresLifecycleIdempotencyAdapter({ db }),
+      outboxPublisher: createPostgresInstallOutboxPublisher({ db }),
+      now: () => new Date('2026-03-01T15:00:00Z'),
+      idFactory: () => `plan-rmrb-${String(planCounter++).padStart(3, '0')}`
+    });
+
+    const createInput = {
+      package_id: packageId,
+      org_id: 'org-rmrb',
+      requested_permissions: ['read:config'],
+      org_policy: {
+        mcp_enabled: true,
+        server_allowlist: [packageId],
+        block_flagged: false,
+        permission_caps: {
+          maxPermissions: 5,
+          disallowedPermissions: []
+        }
+      }
+    };
+
+    const planRemove = await lifecycle.createPlan(createInput, 'rm-create-1');
+    await lifecycle.applyPlan(planRemove.plan_id, 'rm-apply-1', 'corr-rm-1');
+
+    const removed = await lifecycle.removePlan(planRemove.plan_id, 'rm-remove-1', 'corr-rm-1');
+    expect(removed).toMatchObject({
+      status: 'remove_succeeded',
+      replayed: false
+    });
+
+    const removedReplay = await lifecycle.removePlan(planRemove.plan_id, 'rm-remove-1', 'corr-rm-1');
+    expect(removedReplay).toMatchObject({
+      status: 'remove_succeeded',
+      replayed: true
+    });
+
+    const planRollback = await lifecycle.createPlan(createInput, 'rb-create-1');
+    await lifecycle.applyPlan(planRollback.plan_id, 'rb-apply-1', 'corr-rb-1');
+
+    const planRollbackLoaded = await lifecycle.getPlan(planRollback.plan_id);
+    if (!planRollbackLoaded) {
+      throw new Error('expected rollback plan to exist');
+    }
+
+    await pool.query(
+      `
+        INSERT INTO install_apply_attempts (
+          plan_internal_id,
+          attempt_number,
+          status,
+          reason_code,
+          details,
+          started_at,
+          completed_at
+        )
+        VALUES (
+          $1::uuid,
+          2,
+          'failed',
+          'adapter_remove_failed',
+          $2::jsonb,
+          '2026-03-01T15:00:00Z'::timestamptz,
+          '2026-03-01T15:00:00Z'::timestamptz
+        )
+      `,
+      [
+        planRollbackLoaded.internal_id,
+        JSON.stringify({
+          operation: 'remove',
+          correlation_id: 'corr-rb-seed'
+        })
+      ]
+    );
+
+    await pool.query(
+      `
+        UPDATE install_plans
+        SET
+          status = 'remove_failed',
+          reason_code = 'adapter_remove_failed'
+        WHERE id = $1::uuid
+      `,
+      [planRollbackLoaded.internal_id]
+    );
+
+    const rolledBack = await lifecycle.rollbackPlan(planRollback.plan_id, 'rb-rollback-1', 'corr-rb-1');
+    expect(rolledBack).toMatchObject({
+      status: 'rollback_succeeded',
+      replayed: false,
+      rollback_mode: 'restore_removed_entries',
+      source_operation: 'remove'
+    });
+
+    const counts = await pool.query<{
+      remove_attempts: string;
+      rollback_attempts: string;
+      remove_audit: string;
+      rollback_audit: string;
+      outbox_remove_success: string;
+      outbox_rollback_success: string;
+    }>(
+      `
+        SELECT
+          (
+            SELECT COUNT(*)::text
+            FROM install_apply_attempts
+            WHERE details->>'operation' = 'remove'
+          ) AS remove_attempts,
+          (
+            SELECT COUNT(*)::text
+            FROM install_apply_attempts
+            WHERE details->>'operation' = 'rollback'
+          ) AS rollback_attempts,
+          (
+            SELECT COUNT(*)::text
+            FROM install_plan_audit
+            WHERE stage = 'remove'
+          ) AS remove_audit,
+          (
+            SELECT COUNT(*)::text
+            FROM install_plan_audit
+            WHERE stage = 'rollback'
+          ) AS rollback_audit,
+          (
+            SELECT COUNT(*)::text
+            FROM ingestion_outbox
+            WHERE event_type = 'install.remove.succeeded'
+          ) AS outbox_remove_success,
+          (
+            SELECT COUNT(*)::text
+            FROM ingestion_outbox
+            WHERE event_type = 'install.rollback.succeeded'
+          ) AS outbox_rollback_success
+      `
+    );
+
+    expect(counts.rows[0]).toEqual({
+      remove_attempts: '2',
+      rollback_attempts: '1',
+      remove_audit: '1',
+      rollback_audit: '1',
+      outbox_remove_success: '1',
+      outbox_rollback_success: '1'
     });
 
     await rm(workspace, { recursive: true, force: true });

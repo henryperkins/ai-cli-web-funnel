@@ -3,6 +3,11 @@
 ## Scope
 Operational guide for runtime start-order enforcement with env-driven feature flags, remote connector auth/secret resolution, OAuth token exchange, and scope-sidecar ownership protection.
 
+## v1 Adapter Scope Lock
+1. GA adapter scope is explicitly locked to `vscode_copilot` + `local` + `stdio`.
+2. Remote transports (`sse`, `streamable-http`) remain `planned` (see `docs/compatibility-matrix.md`).
+3. Any GA scope expansion requires compatibility-matrix update, decision-log entry, and contract/e2e/integration-db evidence.
+
 ## Components
 1. Policy preflight contract: `packages/policy-engine/src/index.ts`
 2. Runtime pipeline contract: `apps/runtime-daemon/src/index.ts`
@@ -21,6 +26,19 @@ Operational guide for runtime start-order enforcement with env-driven feature fl
 4. `start_or_connect`
 5. `health_validate`
 6. `supervise`
+
+## Runtime failure taxonomy (standard output contract)
+1. `policy_preflight_blocked` / `trust_gate_blocked`
+2. `scope_not_found`
+3. `adapter_write_failed` / `adapter_remove_failed` / `adapter_<adapter_specific>`
+4. `preflight_checks_failed`
+5. `start_or_connect_failed`
+6. `remote_sse_hook_missing`
+7. `remote_streamable_http_hook_missing`
+8. `remote_sse_probe_failed`
+9. `remote_streamable_http_probe_failed`
+10. `health_validate_failed`
+11. `supervise_failed`
 
 ## Feature-flag env controls
 1. `FORGE_RUNTIME_LOCAL_SUPERVISOR_ENABLED`

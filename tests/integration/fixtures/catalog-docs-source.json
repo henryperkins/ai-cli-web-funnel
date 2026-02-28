@@ -1,0 +1,13 @@
+{
+  "docs": [
+    {
+      "url": "https://docs.example.com/addons/acme-addon",
+      "title": "Acme Addon",
+      "summary": "Stable docs source example",
+      "updated_at": "2026-03-01T10:00:00Z",
+      "tags": ["mcp", "docs"],
+      "package_slug": "acme-addon",
+      "install_command": "forge install acme-addon"
+    }
+  ]
+}

@@ -72,6 +72,8 @@ export async function resetIntegrationTables(pool: Pool): Promise<void> {
       security_reports,
       security_enforcement_actions,
       security_enforcement_projections,
+      security_appeals,
+      security_enforcement_promotion_decisions,
       outbox_internal_dispatch_runs,
       outbox_internal_dispatch_effects,
       outbox_dead_letter_replay_audit,
@@ -86,9 +88,40 @@ export async function resetIntegrationTables(pool: Pool): Promise<void> {
       profile_install_runs,
       profile_packages,
       profiles,
+      catalog_reconciliation_runs,
+      catalog_source_freshness,
       operational_slo_snapshots,
       operational_slo_rollup_runs
     RESTART IDENTITY CASCADE
+  `);
+
+  await pool.query(`
+    INSERT INTO security_enforcement_rollout_state (
+      singleton_key,
+      current_mode,
+      freeze_active,
+      freeze_reason,
+      decision_run_id,
+      decision_evidence,
+      updated_at
+    )
+    VALUES (
+      TRUE,
+      'raw-only',
+      TRUE,
+      'integration_reset',
+      'integration-reset',
+      '{"source":"tests.integration-db.reset"}'::jsonb,
+      now()
+    )
+    ON CONFLICT (singleton_key) DO UPDATE
+    SET
+      current_mode = EXCLUDED.current_mode,
+      freeze_active = EXCLUDED.freeze_active,
+      freeze_reason = EXCLUDED.freeze_reason,
+      decision_run_id = EXCLUDED.decision_run_id,
+      decision_evidence = EXCLUDED.decision_evidence,
+      updated_at = EXCLUDED.updated_at
   `);
 }
 

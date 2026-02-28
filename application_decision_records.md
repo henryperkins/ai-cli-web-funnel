@@ -701,3 +701,92 @@ Acceptance criteria:
 1. Weekly trust report publishes false-positive rate, SLA attainment, and backlog-breach metrics.
 2. Promotion/revert decisions are logged with explicit gate pass/fail evidence.
 3. Enforcement expansion automatically freezes when any required gate regresses.
+
+---
+
+## DR-020
+
+- Status: `Proposed`
+- Decides: `Phase 0/P0.5 launch contract` (consolidated)
+- Title: End-to-End Funnel Contract (`discover -> choose -> install proxy -> validate`)
+
+Decision:
+
+Forge Phase 0/P0.5 ships as a local-first funnel for AI-native individual developers and small teams using VS Code + Copilot, optimizing for one outcome: reliably discover, configure, and successfully call an MCP tool within five minutes with predictable runtime behavior after first success.
+
+Contract:
+
+1. Discover-result action contract:
+   - every discover result exposes exactly two actions:
+     - `View on GitHub`
+     - `Open in VS Code`
+   - the VS Code action always routes into guided install lifecycle (not a direct unverified write).
+2. Install lifecycle ownership:
+   - install proxy owns detect, dependency resolution, permission gating, install/apply, and health validation before reporting success.
+3. Unified index source contract:
+   - launch index remains unified across GitHub, Smithery, Glama, mcp.so, npm, and PyPI.
+   - normalized GitHub repo URL is the cross-source join key.
+4. Identity + conflict contract:
+   - canonical identity follows DR-003 deterministic `package_id` rules including provisional-to-canonical promotion.
+   - merge conflict resolution and lineage persist per DR-004 (`field_source`, `field_source_updated_at`, `merge_run_id`).
+5. Execution sequencing:
+   - launch-critical path: GitHub discovery/search -> local config-writing install proxy -> npm/PyPI dependency resolution -> health validation + KPI telemetry.
+   - Smithery/Glama/mcp.so are Tier 3 enrichment and attribution partners, not launch-critical dependencies.
+
+Acceptance criteria:
+
+1. Search-to-install telemetry supports DR-002 KPI set (`TTFSC` p90 <= 5 minutes, cold-start success >= 95%).
+2. Search responses always include both user actions plus stable package identity metadata.
+3. Merge runs are deterministic/idempotent with lineage persisted for resolved fields.
+4. Launch remains operable when Tier 3 feeds are degraded, with GitHub + npm/PyPI sustaining baseline behavior.
+
+---
+
+## DR-021
+
+- Status: `Proposed`
+- Decides: `Install Proxy API + lifecycle contract`
+- Title: Install Proxy Contract (Request/Response Schema + Step State Machine + Failure Taxonomy)
+
+Decision:
+
+When a user selects `Open in VS Code`, Forge executes a deterministic install lifecycle through explicit control-plane endpoints with strict idempotency and correlation continuity.
+
+Contract:
+
+1. Endpoint surface:
+   - `POST /v1/install/plans`
+   - `GET /v1/install/plans/:plan_id`
+   - `POST /v1/install/plans/:plan_id/apply` (alias `.../install`)
+   - `POST /v1/install/plans/:plan_id/update`
+   - `POST /v1/install/plans/:plan_id/remove` (alias `.../uninstall`)
+   - `POST /v1/install/plans/:plan_id/rollback`
+   - `POST /v1/install/plans/:plan_id/verify`
+2. Header + replay contract:
+   - mutating calls accept `Idempotency-Key` / `X-Idempotency-Key`.
+   - optional `X-Correlation-Id` is propagated; fallback order is persisted correlation -> `plan_id`.
+   - responses include `x-idempotent-replay=true|false`.
+3. Request/response schema baseline:
+   - create-plan minimum: `package_id`, `org_id`, `requested_permissions`, `org_policy`.
+   - optional create-plan fields: `package_slug`, `trust_state`, `trust_reset_trigger`, `dependency_edges`, `known_package_ids`.
+   - operation responses include `status`, `plan_id`, `attempt_number`, `reason_code`, and operation-specific fields (`target_version`, rollback metadata, verify stages/readiness).
+4. State machine:
+   - `planned -> apply_succeeded|apply_failed`
+   - `apply_succeeded -> verify_succeeded|verify_failed`
+   - `apply_succeeded|verify_succeeded|verify_failed -> update`
+   - `apply_succeeded|verify_succeeded|verify_failed|rollback_succeeded -> remove`
+   - `apply_failed|remove_failed|rollback_failed -> rollback`
+5. Failure taxonomy:
+   - idempotency/conflict: `idempotency_key_reused_with_different_payload`
+   - not found: `package_not_found`, `plan_not_found`
+   - validation: `missing_required_fields`, `body_object_required`, `dependency_edges_invalid`, `known_package_ids_invalid`, `target_version_invalid`, `trust_state_invalid`, `trust_reset_trigger_invalid`
+   - state gating: `update_invalid_plan_state`, `remove_invalid_plan_state`, `rollback_invalid_plan_state`, `rollback_source_attempt_missing`
+   - dependency gating: `dependency_resolution_failed:*`, `remove_dependency_blocked`
+   - adapter/runtime execution: `scope_not_found`, `adapter_write_failed`, `adapter_remove_failed`, runtime verify stage failures.
+
+Acceptance criteria:
+
+1. Contract tests cover each endpoint (`plan/apply/update/remove/rollback/verify`) with replay + conflict behavior.
+2. Invalid-state and dependency-blocked paths map to deterministic HTTP statuses/reasons.
+3. Shared contract package exports request/response/reason-code types consumed by control-plane.
+4. Verify responses persist stage outcomes and return machine-readable readiness/failure reasons for operator triage.

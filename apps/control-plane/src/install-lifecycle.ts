@@ -20,7 +20,21 @@ import {
 import {
   resolveDependencyGraph,
   type DependencyConflict,
-  type DependencyEdge
+  type DependencyEdge,
+  type InstallLifecycleActionStatus as SharedInstallLifecycleActionStatus,
+  type InstallLifecycleActionType as SharedInstallLifecycleActionType,
+  type InstallLifecycleApplyResponse as SharedInstallLifecycleApplyResponse,
+  type InstallLifecycleCreatePlanRequest as SharedInstallLifecycleCreatePlanRequest,
+  type InstallLifecycleCreatePlanResponse as SharedInstallLifecycleCreatePlanResponse,
+  type InstallLifecyclePolicyDecision as SharedInstallLifecyclePolicyDecision,
+  type InstallLifecyclePlanStatus as SharedInstallLifecyclePlanStatus,
+  type InstallLifecycleReasonCode as SharedInstallLifecycleReasonCode,
+  type InstallPlanConflict as SharedInstallPlanConflict,
+  type InstallPlanExplainability as SharedInstallPlanExplainability,
+  type InstallLifecycleRemoveResponse as SharedInstallLifecycleRemoveResponse,
+  type InstallLifecycleRollbackResponse as SharedInstallLifecycleRollbackResponse,
+  type InstallLifecycleUpdateResponse as SharedInstallLifecycleUpdateResponse,
+  type InstallLifecycleVerifyResponse as SharedInstallLifecycleVerifyResponse
 } from '@forge/shared-contracts';
 
 export interface PostgresQueryResult<Row> {
@@ -39,19 +53,14 @@ export interface PostgresTransactionalQueryExecutor extends PostgresQueryExecuto
   withTransaction?<T>(callback: (tx: PostgresQueryExecutor) => Promise<T>): Promise<T>;
 }
 
-export type InstallPlanStatus =
-  | 'planned'
-  | 'apply_succeeded'
-  | 'apply_failed'
-  | 'verify_succeeded'
-  | 'verify_failed'
-  | 'remove_succeeded'
-  | 'remove_failed'
-  | 'rollback_succeeded'
-  | 'rollback_failed';
+export type InstallPlanStatus = SharedInstallLifecyclePlanStatus;
 
-export type InstallActionType = 'write_entry' | 'remove_entry' | 'skip_scope';
-export type InstallActionStatus = 'pending' | 'applied' | 'failed' | 'skipped';
+export type InstallActionType = SharedInstallLifecycleActionType;
+export type InstallActionStatus = SharedInstallLifecycleActionStatus;
+export type InstallPlanConflict = SharedInstallPlanConflict;
+export type InstallPlanExplainability = SharedInstallPlanExplainability;
+export type InstallLifecyclePolicyDecision = SharedInstallLifecyclePolicyDecision;
+export type InstallLifecycleReasonCode = SharedInstallLifecycleReasonCode;
 
 export type InstallLifecycleOutboxEventType =
   | 'install.plan.created'
@@ -142,17 +151,11 @@ export interface InstallPlan {
   actions: InstallPlanAction[];
 }
 
-export interface InstallPlanCreateRequest {
-  package_id: string;
-  package_slug?: string;
-  correlation_id?: string;
-  org_id: string;
-  requested_permissions: string[];
+export interface InstallPlanCreateRequest extends SharedInstallLifecycleCreatePlanRequest {
   org_policy: PolicyPreflightInput['org_policy'];
   trust_state?: RuntimeStartRequest['trust_state'];
   trust_reset_trigger?: RuntimeStartRequest['trust_reset_trigger'];
   dependency_edges?: DependencyEdge[];
-  known_package_ids?: string[];
 }
 
 export interface InstallRuntimeContext {
@@ -168,61 +171,20 @@ export interface DependencyResolutionSummary {
   conflicts: DependencyConflict[];
 }
 
-export interface InstallPlanCreateResponse {
-  status: 'planned';
-  replayed: boolean;
-  plan_id: string;
-  package_id: string;
-  package_slug: string;
+export interface InstallPlanCreateResponse extends SharedInstallLifecycleCreatePlanResponse {
   policy_outcome: PolicyPreflightResult['outcome'];
-  policy_reason_code: string | null;
-  security_state: string;
-  action_count: number;
   dependency_resolution?: DependencyResolutionSummary;
 }
 
-export interface InstallApplyResponse {
-  status: 'apply_succeeded' | 'apply_failed';
-  replayed: boolean;
-  plan_id: string;
-  attempt_number: number;
-  reason_code: string | null;
-}
+export interface InstallApplyResponse extends SharedInstallLifecycleApplyResponse {}
 
-export interface InstallUpdateResponse {
-  status: 'update_succeeded' | 'update_failed';
-  replayed: boolean;
-  plan_id: string;
-  attempt_number: number;
-  reason_code: string | null;
-  target_version: string | null;
-}
+export interface InstallUpdateResponse extends SharedInstallLifecycleUpdateResponse {}
 
-export interface InstallRemoveResponse {
-  status: 'remove_succeeded' | 'remove_failed';
-  replayed: boolean;
-  plan_id: string;
-  attempt_number: number;
-  reason_code: string | null;
-}
+export interface InstallRemoveResponse extends SharedInstallLifecycleRemoveResponse {}
 
-export interface InstallRollbackResponse {
-  status: 'rollback_succeeded' | 'rollback_failed';
-  replayed: boolean;
-  plan_id: string;
-  attempt_number: number;
-  reason_code: string | null;
-  rollback_mode: 'cleanup_partial_install' | 'restore_removed_entries';
-  source_operation: 'apply' | 'update' | 'remove' | 'rollback';
-}
+export interface InstallRollbackResponse extends SharedInstallLifecycleRollbackResponse {}
 
-export interface InstallVerifyResponse {
-  status: 'verify_succeeded' | 'verify_failed';
-  replayed: boolean;
-  plan_id: string;
-  attempt_number: number;
-  readiness: boolean;
-  reason_code: string | null;
+export interface InstallVerifyResponse extends SharedInstallLifecycleVerifyResponse {
   stages: RuntimePipelineResult['stages'];
 }
 
@@ -428,6 +390,213 @@ function parseRuntimeContext(value: unknown): InstallRuntimeContext {
     trust_reset_trigger: String(record.trust_reset_trigger ?? 'none') as RuntimeStartRequest['trust_reset_trigger'],
     mode: String(record.mode ?? 'local') as RuntimeStartRequest['mode'],
     transport: String(record.transport ?? 'stdio') as RuntimeStartRequest['transport']
+  };
+}
+
+function buildPolicyDecision(input: {
+  outcome: PolicyPreflightResult['outcome'];
+  reason_code: string | null;
+  source: InstallLifecyclePolicyDecision['source'];
+}): InstallLifecyclePolicyDecision {
+  return {
+    outcome: input.outcome,
+    reason_code: input.reason_code,
+    blocked: input.outcome === 'policy_blocked',
+    source: input.source
+  };
+}
+
+function mapDependencyConflict(
+  conflict: DependencyConflict
+): Pick<InstallPlanConflict, 'code' | 'severity'> {
+  switch (conflict.kind) {
+    case 'cycle_detected':
+      return {
+        code: 'dependency_cycle',
+        severity: 'error'
+      };
+    case 'missing_dependency':
+      return {
+        code: 'dependency_missing',
+        severity: 'error'
+      };
+    case 'duplicate_edge':
+      return {
+        code: 'dependency_duplicate',
+        severity: 'warning'
+      };
+    default:
+      return {
+        code: 'dependency_duplicate',
+        severity: 'warning'
+      };
+  }
+}
+
+function buildVersionConflicts(edges: DependencyEdge[]): InstallPlanConflict[] {
+  const byPair = new Map<string, Set<string>>();
+
+  for (const edge of edges) {
+    const key = `${edge.from_package_id}->${edge.to_package_id}`;
+    if (!byPair.has(key)) {
+      byPair.set(key, new Set());
+    }
+
+    byPair.get(key)!.add(edge.constraint.trim());
+  }
+
+  const conflicts: InstallPlanConflict[] = [];
+  for (const [key, constraints] of byPair.entries()) {
+    if (constraints.size <= 1) {
+      continue;
+    }
+
+    const [fromPackageId, toPackageId] = key.split('->');
+    const orderedConstraints = [...constraints].sort((left, right) => left.localeCompare(right));
+    conflicts.push({
+      code: 'version_incompatible',
+      reason_code: 'dependency_constraint_conflict',
+      package_ids: [fromPackageId ?? '', toPackageId ?? ''],
+      severity: 'error',
+      message: `Conflicting dependency constraints detected for ${key}: ${orderedConstraints.join(', ')}`
+    });
+  }
+
+  return conflicts;
+}
+
+function sortConflicts(conflicts: InstallPlanConflict[]): InstallPlanConflict[] {
+  const dedupe = new Map<string, InstallPlanConflict>();
+
+  for (const conflict of conflicts) {
+    const packageIds = [...conflict.package_ids].sort((left, right) => left.localeCompare(right));
+    const normalized = {
+      ...conflict,
+      package_ids: packageIds
+    };
+
+    const dedupeKey = stableCanonicalJson({
+      code: normalized.code,
+      reason_code: normalized.reason_code,
+      package_ids: normalized.package_ids,
+      severity: normalized.severity,
+      message: normalized.message
+    });
+
+    dedupe.set(dedupeKey, normalized);
+  }
+
+  return [...dedupe.values()].sort((left, right) => {
+    const codeDelta = left.code.localeCompare(right.code);
+    if (codeDelta !== 0) {
+      return codeDelta;
+    }
+
+    const severityDelta = left.severity.localeCompare(right.severity);
+    if (severityDelta !== 0) {
+      return severityDelta;
+    }
+
+    const reasonDelta = left.reason_code.localeCompare(right.reason_code);
+    if (reasonDelta !== 0) {
+      return reasonDelta;
+    }
+
+    const packageDelta = left.package_ids.join(',').localeCompare(right.package_ids.join(','));
+    if (packageDelta !== 0) {
+      return packageDelta;
+    }
+
+    return left.message.localeCompare(right.message);
+  });
+}
+
+function requiredActionsFromConflicts(conflicts: InstallPlanConflict[]): string[] {
+  const actions = new Set<string>();
+
+  for (const conflict of conflicts) {
+    switch (conflict.code) {
+      case 'policy_blocked':
+        actions.add('Review org policy/security enforcement and resolve blocking reason codes before apply.');
+        break;
+      case 'runtime_incompatible':
+        actions.add('Ensure at least one approved writable runtime scope is available for the target client.');
+        break;
+      case 'capability_incompatible':
+        actions.add('Adjust requested permissions to satisfy policy caps and disallowed-permission rules.');
+        break;
+      case 'version_incompatible':
+        actions.add('Resolve conflicting dependency version constraints before creating a plan.');
+        break;
+      case 'dependency_cycle':
+        actions.add('Break dependency cycles in the requested dependency graph.');
+        break;
+      case 'dependency_missing':
+        actions.add('Add or allow missing required dependencies in the known package set.');
+        break;
+      case 'dependency_duplicate':
+        actions.add('Remove duplicate dependency edges to avoid ambiguous resolution order.');
+        break;
+      default:
+        break;
+    }
+  }
+
+  return [...actions].sort((left, right) => left.localeCompare(right));
+}
+
+function riskFromConflicts(conflicts: InstallPlanConflict[]): InstallPlanExplainability['risk'] {
+  const risks: InstallPlanExplainability['risk'] = conflicts.map((conflict) => {
+    const level: InstallPlanExplainability['risk'][number]['level'] =
+      conflict.code === 'dependency_duplicate'
+        ? 'low'
+        : conflict.code === 'capability_incompatible'
+          ? 'medium'
+          : 'high';
+
+    return {
+      code: conflict.reason_code,
+      level,
+      message: conflict.message
+    };
+  });
+
+  return risks.sort((left, right) => {
+    const codeDelta = left.code.localeCompare(right.code);
+    if (codeDelta !== 0) {
+      return codeDelta;
+    }
+
+    const levelDelta = left.level.localeCompare(right.level);
+    if (levelDelta !== 0) {
+      return levelDelta;
+    }
+
+    return left.message.localeCompare(right.message);
+  });
+}
+
+function buildPlanExplainability(input: {
+  policy: PolicyPreflightResult;
+  scopeSummary: {
+    writable: number;
+    blocked: number;
+  };
+  dependencyResolution?: DependencyResolutionSummary;
+  conflicts: InstallPlanConflict[];
+}): InstallPlanExplainability {
+  const why = [
+    `policy_outcome=${input.policy.outcome}`,
+    `writable_scope_count=${input.scopeSummary.writable}`,
+    `blocked_scope_count=${input.scopeSummary.blocked}`,
+    `dependency_resolved_count=${input.dependencyResolution?.resolved_count ?? 0}`
+  ].sort((left, right) => left.localeCompare(right));
+
+  return {
+    why,
+    risk: riskFromConflicts(input.conflicts),
+    required_actions: requiredActionsFromConflicts(input.conflicts),
+    conflicts: sortConflicts(input.conflicts)
   };
 }
 
@@ -1116,6 +1285,90 @@ export function createInstallLifecycleService(
         };
       }
 
+      const planConflicts: InstallPlanConflict[] = [];
+      for (const conflict of dependencyResolution?.conflicts ?? []) {
+        const mapped = mapDependencyConflict(conflict);
+        planConflicts.push({
+          code: mapped.code,
+          reason_code: conflict.kind,
+          package_ids: [...conflict.package_ids].sort((left, right) => left.localeCompare(right)),
+          severity: mapped.severity,
+          message: conflict.message
+        });
+      }
+
+      if (request.dependency_edges && request.dependency_edges.length > 0) {
+        planConflicts.push(...buildVersionConflicts(request.dependency_edges));
+      }
+
+      const disallowedPermissions = new Set(
+        request.org_policy.permission_caps.disallowedPermissions.map((permission) =>
+          permission.trim().toLowerCase()
+        )
+      );
+      const requestedPermissions = [...request.requested_permissions].map((permission) =>
+        permission.trim().toLowerCase()
+      );
+
+      const blockedPermissions = requestedPermissions.filter((permission) =>
+        disallowedPermissions.has(permission)
+      );
+      if (blockedPermissions.length > 0) {
+        planConflicts.push({
+          code: 'capability_incompatible',
+          reason_code: 'permission_disallowed',
+          package_ids: [request.package_id],
+          severity: 'error',
+          message: `Requested permissions are disallowed by org policy: ${blockedPermissions.sort((left, right) => left.localeCompare(right)).join(', ')}`
+        });
+      }
+
+      if (requestedPermissions.length > request.org_policy.permission_caps.maxPermissions) {
+        planConflicts.push({
+          code: 'capability_incompatible',
+          reason_code: 'permission_cap_exceeded',
+          package_ids: [request.package_id],
+          severity: 'error',
+          message: `Requested permission count ${requestedPermissions.length} exceeds maxPermissions ${request.org_policy.permission_caps.maxPermissions}`
+        });
+      }
+
+      if (orderedScopes.ordered_writable.length === 0) {
+        planConflicts.push({
+          code: 'runtime_incompatible',
+          reason_code: 'no_writable_scope_available',
+          package_ids: [request.package_id],
+          severity: 'error',
+          message: 'No approved writable scope is available for target runtime.'
+        });
+      }
+
+      if (policy.outcome === 'policy_blocked') {
+        planConflicts.push({
+          code: 'policy_blocked',
+          reason_code: policy.reason_code ?? 'policy_blocked',
+          package_ids: [request.package_id],
+          severity: 'error',
+          message: `Policy preflight blocked plan creation${policy.reason_code ? `: ${policy.reason_code}` : ''}.`
+        });
+      }
+
+      const normalizedConflicts = sortConflicts(planConflicts);
+      const explainability = buildPlanExplainability({
+        policy,
+        scopeSummary: {
+          writable: orderedScopes.ordered_writable.length,
+          blocked: orderedScopes.blocked.length
+        },
+        ...(dependencyResolution ? { dependencyResolution } : {}),
+        conflicts: normalizedConflicts
+      });
+      const policyDecision = buildPolicyDecision({
+        outcome: policy.outcome,
+        reason_code: policy.reason_code,
+        source: 'policy_preflight'
+      });
+
       const planId = idFactory();
       const effectiveCorrelationId = request.correlation_id ?? planId;
       const planHash = sha256Hex(
@@ -1126,7 +1379,9 @@ export function createInstallLifecycleService(
           security_state: securityProjection.state,
           actions,
           runtime_context: runtimeContext,
-          dependency_resolution: dependencyResolution ?? null
+          dependency_resolution: dependencyResolution ?? null,
+          explainability,
+          policy_decision: policyDecision
         })
       );
 
@@ -1272,8 +1527,10 @@ export function createInstallLifecycleService(
         package_slug: request.package_slug ?? packageRecord.package_slug,
         policy_outcome: policy.outcome,
         policy_reason_code: policy.reason_code,
+        policy_decision: policyDecision,
         security_state: securityProjection.state,
         action_count: actions.length,
+        explainability,
         ...(dependencyResolution !== undefined ? { dependency_resolution: dependencyResolution } : {})
       };
 
@@ -1337,6 +1594,11 @@ export function createInstallLifecycleService(
       );
       const effectiveCorrelationId =
         correlationId ?? plan.correlation_id ?? plan.plan_id;
+      const policyDecision = buildPolicyDecision({
+        outcome: plan.policy_outcome,
+        reason_code: plan.policy_reason_code,
+        source: 'policy_preflight'
+      });
 
       const scopeMap = createScopeMap(await dependencies.copilotAdapter.discover_scopes());
       const entry: CopilotServerEntry = {
@@ -1347,27 +1609,28 @@ export function createInstallLifecycleService(
         trust_state: plan.runtime_context.trust_state
       };
 
-      let failedReason: string | null = null;
+      let failedReason: InstallLifecycleReasonCode | null = policyDecision.blocked
+        ? 'trust_gate_blocked'
+        : null;
 
       await runInTransaction(dependencies.db, async (tx) => {
-        for (const action of plan.actions) {
-          if (action.action_type === 'skip_scope') {
-            await tx.query(
-              `
-                UPDATE install_plan_actions
-                SET
-                  status = 'skipped',
-                  updated_at = $3::timestamptz
-                WHERE plan_internal_id = $1::uuid AND action_order = $2
-              `,
-              [plan.internal_id, action.action_order, nowIso]
-            );
-            continue;
-          }
+        if (failedReason === 'trust_gate_blocked') {
+          for (const action of plan.actions) {
+            if (action.action_type === 'skip_scope') {
+              await tx.query(
+                `
+                  UPDATE install_plan_actions
+                  SET
+                    status = 'skipped',
+                    reason_code = 'policy_preflight_blocked',
+                    updated_at = $3::timestamptz
+                  WHERE plan_internal_id = $1::uuid AND action_order = $2
+                `,
+                [plan.internal_id, action.action_order, nowIso]
+              );
+              continue;
+            }
 
-          const scope = scopeMap[action.scope];
-          if (!scope) {
-            failedReason = 'scope_not_found';
             await tx.query(
               `
                 UPDATE install_plan_actions
@@ -1380,64 +1643,97 @@ export function createInstallLifecycleService(
               `,
               [plan.internal_id, action.action_order, nowIso, failedReason]
             );
-            break;
           }
-
-          try {
-            await dependencies.copilotAdapter.write_entry(scope, entry);
-
-            if (dependencies.runtimeVerifier.writeScopeSidecarGuarded) {
-              await dependencies.runtimeVerifier.writeScopeSidecarGuarded({
-                scope_hash: sha256Hex(`${plan.package_id}:${scope.scope}:${scope.scope_path}`),
-                scope_daemon_owned: scope.daemon_owned,
-                record: {
-                  package_id: plan.package_id,
-                  package_slug: plan.package_slug,
-                  plan_id: plan.plan_id,
-                  applied_at: nowIso,
-                  scope: scope.scope,
-                  scope_path: scope.scope_path
-                }
-              });
+        } else {
+          for (const action of plan.actions) {
+            if (action.action_type === 'skip_scope') {
+              await tx.query(
+                `
+                  UPDATE install_plan_actions
+                  SET
+                    status = 'skipped',
+                    updated_at = $3::timestamptz
+                  WHERE plan_internal_id = $1::uuid AND action_order = $2
+                `,
+                [plan.internal_id, action.action_order, nowIso]
+              );
+              continue;
             }
 
-            await tx.query(
-              `
-                UPDATE install_plan_actions
-                SET
-                  status = 'applied',
-                  reason_code = 'apply_ok',
-                  last_error = NULL,
-                  updated_at = $3::timestamptz
-                WHERE plan_internal_id = $1::uuid AND action_order = $2
-              `,
-              [plan.internal_id, action.action_order, nowIso]
-            );
-          } catch (error) {
-            failedReason =
-              error instanceof Error && error.name === 'CopilotFilesystemAdapterError'
-                ? `adapter_${error.message}`
-                : 'adapter_write_failed';
+            const scope = scopeMap[action.scope];
+            if (!scope) {
+              failedReason = 'scope_not_found';
+              await tx.query(
+                `
+                  UPDATE install_plan_actions
+                  SET
+                    status = 'failed',
+                    reason_code = $4,
+                    last_error = $4,
+                    updated_at = $3::timestamptz
+                  WHERE plan_internal_id = $1::uuid AND action_order = $2
+                `,
+                [plan.internal_id, action.action_order, nowIso, failedReason]
+              );
+              break;
+            }
 
-            await tx.query(
-              `
-                UPDATE install_plan_actions
-                SET
-                  status = 'failed',
-                  reason_code = $4,
-                  last_error = $5,
-                  updated_at = $3::timestamptz
-                WHERE plan_internal_id = $1::uuid AND action_order = $2
-              `,
-              [
-                plan.internal_id,
-                action.action_order,
-                nowIso,
-                failedReason,
-                error instanceof Error ? error.message : 'unknown_error'
-              ]
-            );
-            break;
+            try {
+              await dependencies.copilotAdapter.write_entry(scope, entry);
+
+              if (dependencies.runtimeVerifier.writeScopeSidecarGuarded) {
+                await dependencies.runtimeVerifier.writeScopeSidecarGuarded({
+                  scope_hash: sha256Hex(`${plan.package_id}:${scope.scope}:${scope.scope_path}`),
+                  scope_daemon_owned: scope.daemon_owned,
+                  record: {
+                    package_id: plan.package_id,
+                    package_slug: plan.package_slug,
+                    plan_id: plan.plan_id,
+                    applied_at: nowIso,
+                    scope: scope.scope,
+                    scope_path: scope.scope_path
+                  }
+                });
+              }
+
+              await tx.query(
+                `
+                  UPDATE install_plan_actions
+                  SET
+                    status = 'applied',
+                    reason_code = 'apply_ok',
+                    last_error = NULL,
+                    updated_at = $3::timestamptz
+                  WHERE plan_internal_id = $1::uuid AND action_order = $2
+                `,
+                [plan.internal_id, action.action_order, nowIso]
+              );
+            } catch (error) {
+              failedReason =
+                error instanceof Error && error.name === 'CopilotFilesystemAdapterError'
+                  ? `adapter_${error.message}`
+                  : 'adapter_write_failed';
+
+              await tx.query(
+                `
+                  UPDATE install_plan_actions
+                  SET
+                    status = 'failed',
+                    reason_code = $4,
+                    last_error = $5,
+                    updated_at = $3::timestamptz
+                  WHERE plan_internal_id = $1::uuid AND action_order = $2
+                `,
+                [
+                  plan.internal_id,
+                  action.action_order,
+                  nowIso,
+                  failedReason,
+                  error instanceof Error ? error.message : 'unknown_error'
+                ]
+              );
+              break;
+            }
           }
         }
 
@@ -1470,7 +1766,10 @@ export function createInstallLifecycleService(
             attemptNumber,
             finalStatus === 'apply_succeeded' ? 'succeeded' : 'failed',
             failedReason,
-            JSON.stringify({ correlation_id: effectiveCorrelationId }),
+            JSON.stringify({
+              correlation_id: effectiveCorrelationId,
+              policy_decision: policyDecision
+            }),
             nowIso
           ]
         );
@@ -1517,7 +1816,8 @@ export function createInstallLifecycleService(
             plan_id: planId,
             attempt_number: attemptNumber,
             reason_code: failedReason,
-            correlation_id: effectiveCorrelationId
+            correlation_id: effectiveCorrelationId,
+            policy_decision: policyDecision
           },
           occurred_at: nowIso
         });
@@ -1528,7 +1828,8 @@ export function createInstallLifecycleService(
         replayed: false,
         plan_id: planId,
         attempt_number: attemptNumber,
-        reason_code: failedReason
+        reason_code: failedReason,
+        policy_decision: policyDecision
       };
 
       if (idempotencyKey) {
@@ -1601,6 +1902,11 @@ export function createInstallLifecycleService(
       );
       const effectiveCorrelationId =
         correlationId ?? plan.correlation_id ?? plan.plan_id;
+      const policyDecision = buildPolicyDecision({
+        outcome: plan.policy_outcome,
+        reason_code: plan.policy_reason_code,
+        source: 'policy_preflight'
+      });
 
       const scopeMap = createScopeMap(await dependencies.copilotAdapter.discover_scopes());
       const entry: CopilotServerEntry = {
@@ -1611,7 +1917,7 @@ export function createInstallLifecycleService(
         trust_state: plan.runtime_context.trust_state
       };
 
-      let failedReason: string | null = null;
+      let failedReason: InstallLifecycleReasonCode | null = null;
 
       await runInTransaction(dependencies.db, async (tx) => {
         for (const action of plan.actions) {
@@ -1737,7 +2043,8 @@ export function createInstallLifecycleService(
             JSON.stringify({
               operation: 'update',
               target_version: targetVersion ?? null,
-              correlation_id: effectiveCorrelationId
+              correlation_id: effectiveCorrelationId,
+              policy_decision: policyDecision
             }),
             nowIso
           ]
@@ -1793,7 +2100,8 @@ export function createInstallLifecycleService(
             attempt_number: attemptNumber,
             reason_code: failedReason,
             correlation_id: effectiveCorrelationId,
-            target_version: targetVersion ?? null
+            target_version: targetVersion ?? null,
+            policy_decision: policyDecision
           },
           occurred_at: nowIso
         });
@@ -1805,7 +2113,8 @@ export function createInstallLifecycleService(
         plan_id: planId,
         attempt_number: attemptNumber,
         reason_code: failedReason,
-        target_version: targetVersion ?? null
+        target_version: targetVersion ?? null,
+        policy_decision: policyDecision
       };
 
       if (idempotencyKey) {
@@ -1885,9 +2194,14 @@ export function createInstallLifecycleService(
       );
       const effectiveCorrelationId =
         correlationId ?? plan.correlation_id ?? plan.plan_id;
+      const policyDecision = buildPolicyDecision({
+        outcome: plan.policy_outcome,
+        reason_code: plan.policy_reason_code,
+        source: 'policy_preflight'
+      });
 
       const scopeMap = createScopeMap(await dependencies.copilotAdapter.discover_scopes());
-      let failedReason: string | null = null;
+      let failedReason: InstallLifecycleReasonCode | null = null;
 
       await runInTransaction(dependencies.db, async (tx) => {
         for (const action of plan.actions) {
@@ -1998,7 +2312,8 @@ export function createInstallLifecycleService(
             JSON.stringify({
               operation: 'remove',
               correlation_id: effectiveCorrelationId,
-              required_profile_references: requiredProfileReferences
+              required_profile_references: requiredProfileReferences,
+              policy_decision: policyDecision
             }),
             nowIso
           ]
@@ -2048,7 +2363,8 @@ export function createInstallLifecycleService(
             plan_id: planId,
             attempt_number: attemptNumber,
             reason_code: failedReason,
-            correlation_id: effectiveCorrelationId
+            correlation_id: effectiveCorrelationId,
+            policy_decision: policyDecision
           },
           occurred_at: nowIso
         });
@@ -2059,7 +2375,8 @@ export function createInstallLifecycleService(
         replayed: false,
         plan_id: planId,
         attempt_number: attemptNumber,
-        reason_code: failedReason
+        reason_code: failedReason,
+        policy_decision: policyDecision
       };
 
       if (idempotencyKey) {
@@ -2147,6 +2464,11 @@ export function createInstallLifecycleService(
       );
       const effectiveCorrelationId =
         correlationId ?? plan.correlation_id ?? plan.plan_id;
+      const policyDecision = buildPolicyDecision({
+        outcome: plan.policy_outcome,
+        reason_code: plan.policy_reason_code,
+        source: 'policy_preflight'
+      });
 
       const scopeMap = createScopeMap(await dependencies.copilotAdapter.discover_scopes());
       const entry: CopilotServerEntry = {
@@ -2157,7 +2479,7 @@ export function createInstallLifecycleService(
         trust_state: plan.runtime_context.trust_state
       };
 
-      let failedReason: string | null = null;
+      let failedReason: InstallLifecycleReasonCode | null = null;
 
       await runInTransaction(dependencies.db, async (tx) => {
         for (const action of plan.actions) {
@@ -2298,7 +2620,8 @@ export function createInstallLifecycleService(
               rollback_mode: rollbackMode,
               source_operation: sourceOperation,
               source_attempt_number: sourceAttempt.attempt_number,
-              correlation_id: effectiveCorrelationId
+              correlation_id: effectiveCorrelationId,
+              policy_decision: policyDecision
             }),
             nowIso
           ]
@@ -2353,7 +2676,8 @@ export function createInstallLifecycleService(
             correlation_id: effectiveCorrelationId,
             rollback_mode: rollbackMode,
             source_operation: sourceOperation,
-            source_attempt_number: sourceAttempt.attempt_number
+            source_attempt_number: sourceAttempt.attempt_number,
+            policy_decision: policyDecision
           },
           occurred_at: nowIso
         });
@@ -2366,7 +2690,8 @@ export function createInstallLifecycleService(
         attempt_number: attemptNumber,
         reason_code: failedReason,
         rollback_mode: rollbackMode,
-        source_operation: sourceOperation
+        source_operation: sourceOperation,
+        policy_decision: policyDecision
       };
 
       if (idempotencyKey) {
@@ -2453,6 +2778,11 @@ export function createInstallLifecycleService(
       runtimeRequest.correlation_id = effectiveCorrelationId;
 
       const runtimeResult = await dependencies.runtimeVerifier.run(runtimeRequest);
+      const policyDecision = buildPolicyDecision({
+        outcome: runtimeResult.policy.outcome,
+        reason_code: runtimeResult.policy.reason_code,
+        source: 'runtime_preflight'
+      });
 
       const finalStatus: InstallVerifyResponse['status'] = runtimeResult.ready
         ? 'verify_succeeded'
@@ -2495,7 +2825,8 @@ export function createInstallLifecycleService(
             JSON.stringify(runtimeResult.stages),
             JSON.stringify({
               final_trust_state: runtimeResult.final_trust_state,
-              policy_outcome: runtimeResult.policy.outcome
+              policy_outcome: runtimeResult.policy.outcome,
+              policy_decision: policyDecision
             }),
             nowIso
           ]
@@ -2543,7 +2874,8 @@ export function createInstallLifecycleService(
             attempt_number: attemptNumber,
             readiness: runtimeResult.ready,
             reason_code: reasonCode,
-            correlation_id: effectiveCorrelationId
+            correlation_id: effectiveCorrelationId,
+            policy_decision: policyDecision
           },
           occurred_at: nowIso
         });
@@ -2556,7 +2888,8 @@ export function createInstallLifecycleService(
         attempt_number: attemptNumber,
         readiness: runtimeResult.ready,
         reason_code: reasonCode,
-        stages: runtimeResult.stages
+        stages: runtimeResult.stages,
+        policy_decision: policyDecision
       };
 
       if (idempotencyKey) {

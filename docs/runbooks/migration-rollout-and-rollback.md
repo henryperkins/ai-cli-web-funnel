@@ -9,6 +9,7 @@ Operational checklist for applying forward-only schema migrations, including asy
 3. `infra/postgres/migrations/007_async_boundaries_and_projection_snapshots.sql`
 4. `infra/postgres/migrations/008_security_reporter_metrics_freshness_guard.sql`
 5. `infra/postgres/migrations/009_install_lifecycle_foundations.sql`
+6. `infra/postgres/migrations/015_security_appeals_and_trust_gates.sql`
 
 ## Preflight
 1. Run contract verification:
@@ -18,13 +19,16 @@ Operational checklist for applying forward-only schema migrations, including asy
 3. Confirm DB backup/PITR checkpoint exists before applying any migration.
 
 ## Rollout steps
-1. Apply migrations in numeric order (`005 -> 006 -> 007 -> 008 -> 009`).
+1. Apply migrations in numeric order (`005 -> 006 -> 007 -> 008 -> 009 -> 015`).
 2. After apply, verify required relations:
    - `registry.packages`
    - `public.registry_packages` (compatibility view)
    - `security_reports`
    - `security_enforcement_actions`
    - `security_enforcement_projections`
+   - `security_enforcement_rollout_state`
+   - `security_enforcement_promotion_decisions`
+   - `security_appeals` (priority/reviewer fields populated)
    - `ingestion_idempotency_records`
    - `ingestion_outbox`
    - `install_plans`
@@ -43,6 +47,7 @@ Operational checklist for applying forward-only schema migrations, including asy
 2. Migration `007` only adds tables/indexes (`CREATE TABLE/INDEX IF NOT EXISTS`) with brief catalog locks.
 3. Migration `008` is function/table additive and metadata-level (no table rewrite expected).
 4. Migration `009` is additive table/index creation only (`CREATE TABLE/INDEX IF NOT EXISTS`) with brief catalog locks and no table rewrites.
+5. Migration `015` is additive enum/table/function/index DDL plus `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` metadata locks on `security_appeals`.
 
 ## Rollback playbook (forward compensation only)
 1. Do not run destructive down migrations.

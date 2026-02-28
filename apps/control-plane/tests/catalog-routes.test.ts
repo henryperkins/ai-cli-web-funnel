@@ -65,6 +65,15 @@ describe('catalog routes search actions', () => {
     });
 
     expect(response.results).toHaveLength(2);
+    expect(response.results[0]).toMatchObject({
+      package_id: '11111111-1111-4111-8111-111111111111',
+      package_slug: 'acme/catalog-addon',
+      canonical_repo: 'github.com/acme/catalog-addon'
+    });
+    expect(Object.keys(response.results[0]!.actions).sort()).toEqual([
+      'open_in_vscode',
+      'view_on_github'
+    ]);
     expect(response.results[0]?.actions.view_on_github).toEqual({
       label: 'View on GitHub',
       href: 'https://github.com/acme/catalog-addon'

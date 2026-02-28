@@ -3,7 +3,7 @@
 Story: `E9-S3`
 Owner: Platform + Product
 Priority: `P0`
-Status: Not Started
+Status: Done (2026-02-28)
 
 ## Objective
 

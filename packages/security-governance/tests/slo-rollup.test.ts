@@ -97,7 +97,7 @@ function createSeededDb(counts: Record<string, number>) {
   const originalQuery = base.query;
   let queryIndex = 0;
 
-  // The SLO service makes 15 sequential COUNT queries in order:
+  // The SLO service makes 17 sequential COUNT queries in order:
   const queryOrder = [
     'outbox_total',
     'outbox_dead_letter',
@@ -123,6 +123,46 @@ function createSeededDb(counts: Record<string, number>) {
     params: readonly unknown[] = []
   ): Promise<{ rows: Row[]; rowCount: number | null }> => {
     const trimmed = sql.trim().toUpperCase();
+
+    if (trimmed.includes('PERCENTILE_CONT(0.9)')) {
+      const p90 = counts.ttfsc_p90_seconds ?? 0;
+      const sampleSize = counts.ttfsc_sample_size ?? 0;
+      const withinTarget = counts.ttfsc_within_target ?? 0;
+      return {
+        rows: [
+          {
+            p90_seconds: String(p90),
+            sample_size: String(sampleSize),
+            within_target: String(withinTarget)
+          } as unknown as Row
+        ],
+        rowCount: 1
+      };
+    }
+
+    if (trimmed.includes('WITH COLD_STARTS AS')) {
+      return {
+        rows: [
+          {
+            total: String(counts.cold_start_total ?? 0),
+            succeeded: String(counts.cold_start_succeeded ?? 0)
+          } as unknown as Row
+        ],
+        rowCount: 1
+      };
+    }
+
+    if (trimmed.includes('WITH RUNTIME_STARTS AS')) {
+      return {
+        rows: [
+          {
+            total: String(counts.retryless_total ?? 0),
+            succeeded: String(counts.retryless_succeeded ?? 0)
+          } as unknown as Row
+        ],
+        rowCount: 1
+      };
+    }
 
     if (trimmed.includes('SELECT COUNT(*)')) {
       const key = queryOrder[queryIndex] ?? 'unknown';
@@ -161,12 +201,12 @@ describe('operational SLO rollup service', () => {
       expect(result.persisted).toBe(false);
       expect(result.window_from).toBe(windowFrom);
       expect(result.window_to).toBe(windowTo);
-      expect(result.metrics).toHaveLength(7);
+      expect(result.metrics).toHaveLength(10);
       expect(db.tables.runs).toHaveLength(0);
       expect(db.tables.snapshots).toHaveLength(0);
     });
 
-    it('returns all 7 expected metric keys', async () => {
+    it('returns all expected metric keys', async () => {
       const db = createInMemoryDb();
       const service = createOperationalSloRollupService({ db, now: () => fixedDate });
 
@@ -187,7 +227,10 @@ describe('operational SLO rollup service', () => {
         'install.verify.success_rate',
         'install.lifecycle.replay_ratio',
         'profile.install_run.success_rate',
-        'governance.recompute.dispatch_success_rate'
+        'governance.recompute.dispatch_success_rate',
+        'funnel.ttfsc.p90_seconds',
+        'funnel.cold_start.success_rate',
+        'funnel.retryless.success_rate'
       ]);
     });
 
@@ -209,7 +252,14 @@ describe('operational SLO rollup service', () => {
         profile_runs_partial: 1,
         governance_actions_total: 15,
         governance_recompute_requested: 12,
-        governance_recompute_processed: 11
+        governance_recompute_processed: 11,
+        ttfsc_p90_seconds: 240,
+        ttfsc_sample_size: 40,
+        ttfsc_within_target: 36,
+        cold_start_total: 20,
+        cold_start_succeeded: 19,
+        retryless_total: 20,
+        retryless_succeeded: 17
       });
 
       const service = createOperationalSloRollupService({ db, now: () => fixedDate });
@@ -234,6 +284,16 @@ describe('operational SLO rollup service', () => {
       expect(byKey('profile.install_run.success_rate').ratio).toBe(0.8);
       expect(byKey('profile.install_run.success_rate').metadata).toEqual({ partially_failed_count: 1 });
       expect(byKey('governance.recompute.dispatch_success_rate').ratio).toBeCloseTo(0.916667, 5);
+      expect(byKey('funnel.ttfsc.p90_seconds').ratio).toBe(0.8);
+      expect(byKey('funnel.ttfsc.p90_seconds').metadata).toMatchObject({
+        target_seconds: 300,
+        p90_seconds_exact: 240,
+        within_target_count: 36,
+        within_target_rate: 0.9,
+        meets_target: true
+      });
+      expect(byKey('funnel.cold_start.success_rate').ratio).toBe(0.95);
+      expect(byKey('funnel.retryless.success_rate').ratio).toBe(0.85);
     });
   });
 
@@ -256,8 +316,8 @@ describe('operational SLO rollup service', () => {
       expect(db.tables.runs).toHaveLength(1);
       expect(db.tables.runs[0]!.run_id).toBe('run-prod-001');
       expect(db.tables.runs[0]!.status).toBe('completed');
-      expect(db.tables.runs[0]!.snapshot_count).toBe(7);
-      expect(db.tables.snapshots).toHaveLength(7);
+      expect(db.tables.runs[0]!.snapshot_count).toBe(10);
+      expect(db.tables.snapshots).toHaveLength(10);
     });
 
     it('links snapshots to run internal id', async () => {
@@ -295,11 +355,14 @@ describe('operational SLO rollup service', () => {
         limit: 100
       });
 
-      // All counts are 0, so all ratios should be null (0/0 = null)
       for (const metric of result.metrics) {
         expect(metric.ratio).toBeNull();
-        expect(metric.denominator).toBe(0);
         expect(metric.numerator).toBe(0);
+        if (metric.metric_key === 'funnel.ttfsc.p90_seconds') {
+          expect(metric.denominator).toBe(300);
+        } else {
+          expect(metric.denominator).toBe(0);
+        }
       }
     });
 
@@ -320,7 +383,7 @@ describe('operational SLO rollup service', () => {
 
       expect(result.run_id).toBe('run-no-now');
       // Should succeed without errors
-      expect(result.metrics).toHaveLength(7);
+      expect(result.metrics).toHaveLength(10);
     });
 
     it('rolls back transaction on insert failure in production mode', async () => {

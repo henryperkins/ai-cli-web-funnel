@@ -21,7 +21,13 @@ export type BehavioralEventName = (typeof BEHAVIORAL_EVENT_NAMES)[number];
 export type RuntimeEventName = (typeof RUNTIME_EVENT_NAMES)[number];
 export type TelemetryEventName = (typeof TELEMETRY_EVENT_NAMES)[number];
 
-export const PACKAGE_ACTION_TYPES = ['view_github', 'copy_install', 'bookmark', 'share'] as const;
+export const PACKAGE_ACTION_TYPES = [
+  'view_github',
+  'open_in_vscode',
+  'copy_install',
+  'bookmark',
+  'share'
+] as const;
 export type PackageActionType = (typeof PACKAGE_ACTION_TYPES)[number];
 
 export const PROMOTED_INTERACTION_TYPES = ['impression', 'click', 'action'] as const;

@@ -17,6 +17,18 @@
     "./sources/github-connector": {
       "types": "./src/sources/github-connector.ts",
       "default": "./dist/sources/github-connector.js"
+    },
+    "./sources/npm-connector": {
+      "types": "./src/sources/npm-connector.ts",
+      "default": "./dist/sources/npm-connector.js"
+    },
+    "./sources/pypi-connector": {
+      "types": "./src/sources/pypi-connector.ts",
+      "default": "./dist/sources/pypi-connector.js"
+    },
+    "./sources/docs-connector": {
+      "types": "./src/sources/docs-connector.ts",
+      "default": "./dist/sources/docs-connector.js"
     }
   },
   "scripts": {

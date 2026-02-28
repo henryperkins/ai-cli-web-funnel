@@ -8,7 +8,7 @@ Implemented in:
 2. `infra/postgres/migrations/` — SLO tables (`operational_slo_rollup_runs`, `operational_slo_snapshots`)
 
 ## Overview
-The SLO rollup aggregates operational health metrics into time-windowed snapshots. There are 7 SLO metric families:
+The SLO rollup aggregates operational health metrics into time-windowed snapshots. There are 10 SLO metric families:
 
 1. **Outbox dead-letter rate** — fraction of outbox jobs that ended in `dead_letter` status.
 2. **Retrieval semantic fallback rate** — fraction of retrieval queries that fell back from semantic to keyword search.
@@ -17,6 +17,9 @@ The SLO rollup aggregates operational health metrics into time-windowed snapshot
 5. **Install lifecycle replay ratio** — ratio of replayed install lifecycle events to total events.
 6. **Profile install run success rate** — fraction of profile install runs that completed successfully.
 7. **Governance recompute dispatch success rate** — fraction of governance recompute dispatches that succeeded.
+8. **TTFSC p90 seconds** — p90 of `search.query -> first runtime success` latency with target metadata (`<=300s`).
+9. **Cold-start success rate** — fraction of first-attempt runtime starts that reach success/healthy outcome.
+10. **Retryless first-invocation success rate** — fraction of first invocations that succeed without a retry attempt.
 
 ## Prerequisites
 - `FORGE_DATABASE_URL` or `DATABASE_URL` environment variable must be set to a valid Postgres connection string.

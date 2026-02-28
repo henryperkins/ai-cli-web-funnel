@@ -7,6 +7,7 @@ import {
   InMemoryReporterNonceStore,
   InMemorySecurityEnforcementStore,
   InMemorySecurityReportStore,
+  resolveRolloutProjectedState,
   type SecurityReportPayload,
   type SignedReporterIngestionRequest
 } from '../src/index.js';
@@ -65,6 +66,8 @@ function createHarness(options: {
   signatureValid?: boolean;
   reporterStatus?: 'active' | 'probation' | 'suspended' | 'removed';
   abuseSuspected?: boolean;
+  rolloutMode?: 'raw-only' | 'flagged-first' | 'full-catalog';
+  freezeActive?: boolean;
 } = {}) {
   const nonceStore = new InMemoryReporterNonceStore();
   const reportStore = new InMemorySecurityReportStore();
@@ -100,6 +103,20 @@ function createHarness(options: {
           };
         }
       },
+      ...(options.rolloutMode || options.freezeActive !== undefined
+        ? {
+            rolloutModeResolver: {
+              async resolveProjection(input) {
+                return resolveRolloutProjectedState({
+                  projected_state: input.projected_state,
+                  source_kind: input.source_kind,
+                  mode: options.rolloutMode ?? 'full-catalog',
+                  freeze_active: options.freezeActive ?? false
+                });
+              }
+            }
+          }
+        : {}),
       outboxPublisher: {
         async publish(envelope) {
           publishedEvents.push(`${envelope.event_type}:${envelope.dedupe_key}`);
@@ -264,5 +281,46 @@ describe('signed reporter ingestion runtime path', () => {
       'security.report.accepted:report-1:pkg-1:accepted',
       'security.enforcement.recompute.requested:report-1:pkg-1:projection'
     ]);
+  });
+
+  it('downgrades temporary blocks to flagged in flagged-first rollout mode', async () => {
+    const harness = createHarness({
+      rolloutMode: 'flagged-first'
+    });
+
+    const result = await harness.entrypoint.submit(
+      buildRequest(buildPayload(), {
+        nonce: 'nonce-rollout-1'
+      })
+    );
+
+    expect(result.status).toBe('accepted');
+    if (result.status === 'accepted') {
+      expect(result.projected_state).toBe('flagged');
+      expect(result.rollout_mode).toBe('flagged-first');
+      expect(result.rollout_adjusted).toBe(true);
+      expect(result.projection?.state).toBe('flagged');
+    }
+  });
+
+  it('forces raw-only behavior while rollout freeze is active', async () => {
+    const harness = createHarness({
+      rolloutMode: 'full-catalog',
+      freezeActive: true
+    });
+
+    const result = await harness.entrypoint.submit(
+      buildRequest(buildPayload(), {
+        nonce: 'nonce-rollout-2'
+      })
+    );
+
+    expect(result.status).toBe('accepted');
+    if (result.status === 'accepted') {
+      expect(result.projected_state).toBe('policy_blocked_temp');
+      expect(result.rollout_mode).toBe('raw-only');
+      expect(result.rollout_freeze_active).toBe(true);
+      expect(result.rollout_adjusted).toBe(false);
+    }
   });
 });

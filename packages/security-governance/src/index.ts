@@ -5,6 +5,7 @@ export type ReporterTier = 'A' | 'B' | 'C';
 export type ReporterStatus = 'active' | 'probation' | 'suspended' | 'removed';
 export type SecuritySeverity = 'low' | 'medium' | 'high' | 'critical';
 export type SecuritySourceKind = 'raw' | 'curated';
+export type SecurityRolloutMode = 'raw-only' | 'flagged-first' | 'full-catalog';
 
 export type ReportValidationReasonCode =
   | 'signature_invalid'
@@ -54,6 +55,23 @@ export interface SecurityEnforcementProjectionDecision {
   warning_only: boolean;
   source: 'security_governance';
   updated_at: string;
+}
+
+export interface SecurityRolloutState {
+  current_mode: SecurityRolloutMode;
+  freeze_active: boolean;
+  freeze_reason: string | null;
+  decision_run_id: string | null;
+  decision_evidence: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface SecurityRolloutProjectionResolution {
+  state: EnforcementState | 'none';
+  mode: SecurityRolloutMode;
+  freeze_active: boolean;
+  adjusted: boolean;
+  adjustment_reason: string | null;
 }
 
 export interface FlaggedBlockedBehaviorContract {
@@ -452,6 +470,114 @@ export function getFlaggedBlockedBehaviorContract(
   };
 }
 
+export function resolveRolloutProjectedState(input: {
+  projected_state: EnforcementState | 'none';
+  source_kind: SecuritySourceKind;
+  mode: SecurityRolloutMode;
+  freeze_active: boolean;
+}): SecurityRolloutProjectionResolution {
+  const mode = input.freeze_active ? 'raw-only' : input.mode;
+  const state = input.projected_state;
+
+  if (state === 'none') {
+    return {
+      state,
+      mode,
+      freeze_active: input.freeze_active,
+      adjusted: false,
+      adjustment_reason: null
+    };
+  }
+
+  if (mode === 'raw-only') {
+    if (input.source_kind === 'raw') {
+      return {
+        state,
+        mode,
+        freeze_active: input.freeze_active,
+        adjusted: false,
+        adjustment_reason: null
+      };
+    }
+
+    const downgraded = state === 'flagged' ? state : 'flagged';
+    return {
+      state: downgraded,
+      mode,
+      freeze_active: input.freeze_active,
+      adjusted: downgraded !== state,
+      adjustment_reason:
+        downgraded !== state ? 'rollout_raw_only_non_raw_downgrade' : null
+    };
+  }
+
+  if (mode === 'flagged-first') {
+    if (state === 'policy_blocked_perm' || state === 'policy_blocked_temp') {
+      return {
+        state: 'flagged',
+        mode,
+        freeze_active: input.freeze_active,
+        adjusted: true,
+        adjustment_reason: 'rollout_flagged_first_block_downgrade'
+      };
+    }
+
+    return {
+      state,
+      mode,
+      freeze_active: input.freeze_active,
+      adjusted: false,
+      adjustment_reason: null
+    };
+  }
+
+  return {
+    state,
+    mode,
+    freeze_active: input.freeze_active,
+    adjusted: false,
+    adjustment_reason: null
+  };
+}
+
+export interface SecurityRolloutStateStore {
+  getState(nowIso?: string): Promise<SecurityRolloutState>;
+  updateState(input: {
+    current_mode: SecurityRolloutMode;
+    freeze_active: boolean;
+    freeze_reason: string | null;
+    decision_run_id: string | null;
+    decision_evidence: Record<string, unknown>;
+    updated_at: string;
+  }): Promise<SecurityRolloutState>;
+}
+
+export interface SecurityRolloutModeResolver {
+  resolveProjection(input: {
+    projected_state: EnforcementState | 'none';
+    source_kind: SecuritySourceKind;
+    now_iso?: string;
+  }): Promise<SecurityRolloutProjectionResolution>;
+}
+
+export function createSecurityRolloutModeResolver(
+  dependencies: {
+    rolloutStateStore: Pick<SecurityRolloutStateStore, 'getState'>;
+  }
+): SecurityRolloutModeResolver {
+  return {
+    async resolveProjection(input) {
+      const state = await dependencies.rolloutStateStore.getState(input.now_iso);
+      return resolveRolloutProjectedState({
+        projected_state: input.projected_state,
+        source_kind: input.source_kind,
+        mode: state.current_mode,
+        freeze_active: state.freeze_active
+      });
+    }
+  };
+}
+
 export interface ReporterNonceRecord {
   reporter_id: string;
   nonce: string;
@@ -695,6 +821,9 @@ export interface SignedReporterIngestionAcceptedResult {
   queue: SecurityReportValidationOutcome['queue'];
   projected_state: EnforcementState | 'none';
   projection: SecurityEnforcementProjectionDecision | null;
+  rollout_mode: SecurityRolloutMode;
+  rollout_freeze_active: boolean;
+  rollout_adjusted: boolean;
 }
 
 export interface SignedReporterIngestionRejectedResult {
@@ -714,6 +843,7 @@ export interface SignedReporterIngestionDependencies {
   signatureVerifier: ReporterSignatureVerifier;
   persistence: SecurityReportPersistenceAdapter;
   projectionStore?: SecurityEnforcementProjectionStore;
+  rolloutModeResolver?: SecurityRolloutModeResolver;
   abuseEvaluator?: SecurityReportAbuseEvaluator;
   idFactory?: () => string;
   outboxPublisher?: SecurityReportOutboxPublisher;
@@ -931,6 +1061,22 @@ export function createSignedReporterIngestionService(
         abuse_suspected: abuseEvaluation.abuse_suspected
       });
 
+      const rolloutResolution = dependencies.rolloutModeResolver
+        ? await dependencies.rolloutModeResolver.resolveProjection({
+            projected_state: validation.projected_state,
+            source_kind: payload.source_kind,
+            now_iso: nowIso
+          })
+        : {
+            state: validation.projected_state,
+            mode: 'full-catalog' as SecurityRolloutMode,
+            freeze_active: false,
+            adjusted: false,
+            adjustment_reason: null
+          };
+
+      const effectiveProjectedState = rolloutResolution.state;
+
       const reportId = dependencies.idFactory ? dependencies.idFactory() : randomUUID();
       await dependencies.persistence.appendReport({
         report_id: reportId,
@@ -944,7 +1090,7 @@ export function createSignedReporterIngestionService(
         abuse_suspected: abuseEvaluation.abuse_suspected,
         reason_code: validation.reason_code,
         queue: validation.queue,
-        projected_state: validation.projected_state,
+        projected_state: effectiveProjectedState,
         body_sha256: bodyShaHeader,
         request_timestamp: timestamp,
         request_nonce: nonce,
@@ -967,16 +1113,20 @@ export function createSignedReporterIngestionService(
       }
 
       let projection: SecurityEnforcementProjectionDecision | null = null;
-      if (dependencies.projectionStore && validation.projected_state !== 'none') {
+      if (dependencies.projectionStore && effectiveProjectedState !== 'none') {
+        const effectiveExpiresInHours =
+          effectiveProjectedState === validation.projected_state
+            ? validation.expires_in_hours
+            : null;
         const expiresAt =
-          validation.expires_in_hours === null
+          effectiveExpiresInHours === null
             ? null
-            : new Date(nowMs + validation.expires_in_hours * 60 * 60 * 1000).toISOString();
+            : new Date(nowMs + effectiveExpiresInHours * 60 * 60 * 1000).toISOString();
 
         await dependencies.projectionStore.appendAction({
           action_id: `report:${reportId}`,
           package_id: payload.package_id,
-          state: validation.projected_state,
+          state: effectiveProjectedState,
           reason_code: validation.reason_code,
           active: true,
           created_at: nowIso,
@@ -1005,14 +1155,14 @@ export function createSignedReporterIngestionService(
           occurred_at: nowIso
         });
 
-        if (validation.projected_state !== 'none') {
+        if (effectiveProjectedState !== 'none') {
           await dependencies.outboxPublisher.publish({
             event_type: 'security.enforcement.recompute.requested',
             dedupe_key: `${dedupeBase}:projection`,
             payload: {
               report_id: reportId,
               package_id: payload.package_id,
-              projected_state: validation.projected_state
+              projected_state: effectiveProjectedState
             },
             occurred_at: nowIso
           });
@@ -1024,8 +1174,11 @@ export function createSignedReporterIngestionService(
         report_id: reportId,
         reason_code: validation.reason_code,
         queue: validation.queue,
-        projected_state: validation.projected_state,
-        projection
+        projected_state: effectiveProjectedState,
+        projection,
+        rollout_mode: rolloutResolution.mode,
+        rollout_freeze_active: rolloutResolution.freeze_active,
+        rollout_adjusted: rolloutResolution.adjusted
       };
     }
   };
@@ -1040,6 +1193,417 @@ export function createSignedReporterIngestionEntrypoint(
   return {
     async submit(request: SignedReporterIngestionRequest): Promise<SignedReporterIngestionResult> {
       return service.submit(request);
+    }
+  };
+}
+
+export interface SecurityAppealsMetricsSnapshot {
+  window_from: string;
+  window_to: string;
+  total_opened: number;
+  critical_opened: number;
+  assigned_count: number;
+  critical_assignment_sla_met_count: number;
+  first_response_recorded_count: number;
+  first_response_sla_met_count: number;
+  escalation_count_total: number;
+  assignment_latency_seconds_p50: number | null;
+  assignment_latency_seconds_p95: number | null;
+  first_response_latency_seconds_p50: number | null;
+  first_response_latency_seconds_p95: number | null;
+  critical_assignment_sla_rate: number | null;
+  first_response_sla_rate: number | null;
+}
+
+export interface SecurityAppealsMetricsStore {
+  getSnapshot(input: {
+    window_from: string;
+    window_to: string;
+    now_iso: string;
+  }): Promise<SecurityAppealsMetricsSnapshot>;
+}
+
+export interface SecurityAppealsMetricsServiceDependencies {
+  metricsStore: SecurityAppealsMetricsStore;
+  now?: () => Date;
+}
+
+export function createSecurityAppealsMetricsService(
+  dependencies: SecurityAppealsMetricsServiceDependencies
+) {
+  const now = dependencies.now ?? (() => new Date());
+
+  return {
+    async collect(input: {
+      window_from: string;
+      window_to: string;
+    }): Promise<SecurityAppealsMetricsSnapshot> {
+      return dependencies.metricsStore.getSnapshot({
+        window_from: input.window_from,
+        window_to: input.window_to,
+        now_iso: now().toISOString()
+      });
+    }
+  };
+}
+
+export interface PermanentBlockValidationResult {
+  eligible: boolean;
+  trusted_reporter_count: number;
+  distinct_active_key_count: number;
+  corroborating_report_count: number;
+  reviewer_confirmed: boolean;
+  evidence: Record<string, unknown>;
+}
+
+export interface PermanentBlockPromotionRecord {
+  action_id: string;
+  evidence: Record<string, unknown>;
+}
+
+export interface PermanentBlockPromotionStore {
+  validate(input: {
+    package_id: string;
+    reviewer_id: string;
+    reviewer_confirmed_at: string;
+    window_interval?: string;
+  }): Promise<PermanentBlockValidationResult>;
+  promote(input: {
+    package_id: string;
+    reason_code: string;
+    reviewer_id: string;
+    reviewer_confirmed_at: string;
+    created_at: string;
+  }): Promise<PermanentBlockPromotionRecord>;
+}
+
+export interface PermanentBlockPromotionResult {
+  status: 'promoted' | 'rejected';
+  package_id: string;
+  action_id: string | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface PermanentBlockPromotionServiceDependencies {
+  store: PermanentBlockPromotionStore;
+  now?: () => Date;
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return '';
+}
+
+export function createPermanentBlockPromotionService(
+  dependencies: PermanentBlockPromotionServiceDependencies
+) {
+  const now = dependencies.now ?? (() => new Date());
+
+  return {
+    async promote(input: {
+      package_id: string;
+      reason_code: string;
+      reviewer_id: string;
+      reviewer_confirmed_at?: string;
+      created_at?: string;
+      window_interval?: string;
+    }): Promise<PermanentBlockPromotionResult> {
+      const reviewerConfirmedAt =
+        input.reviewer_confirmed_at ?? now().toISOString();
+      const validation = await dependencies.store.validate({
+        package_id: input.package_id,
+        reviewer_id: input.reviewer_id,
+        reviewer_confirmed_at: reviewerConfirmedAt,
+        ...(input.window_interval ? { window_interval: input.window_interval } : {})
+      });
+
+      if (!validation.eligible) {
+        return {
+          status: 'rejected',
+          package_id: input.package_id,
+          action_id: null,
+          evidence: validation.evidence
+        };
+      }
+
+      const createdAt = input.created_at ?? reviewerConfirmedAt;
+
+      try {
+        const promotion = await dependencies.store.promote({
+          package_id: input.package_id,
+          reason_code: input.reason_code,
+          reviewer_id: input.reviewer_id,
+          reviewer_confirmed_at: reviewerConfirmedAt,
+          created_at: createdAt
+        });
+
+        return {
+          status: 'promoted',
+          package_id: input.package_id,
+          action_id: promotion.action_id,
+          evidence: promotion.evidence
+        };
+      } catch (error) {
+        if (extractErrorMessage(error).includes('perm_block_requirements_not_met')) {
+          const latestValidation = await dependencies.store.validate({
+            package_id: input.package_id,
+            reviewer_id: input.reviewer_id,
+            reviewer_confirmed_at: reviewerConfirmedAt,
+            ...(input.window_interval ? { window_interval: input.window_interval } : {})
+          });
+          return {
+            status: 'rejected',
+            package_id: input.package_id,
+            action_id: null,
+            evidence: latestValidation.evidence
+          };
+        }
+        throw error;
+      }
+    }
+  };
+}
+
+export interface SecurityTrustGateSnapshot {
+  false_positive_numerator: number;
+  false_positive_denominator: number;
+  false_positive_rate: number | null;
+  appeals_sla_numerator: number;
+  appeals_sla_denominator: number;
+  appeals_sla_rate: number | null;
+  unresolved_critical_backlog_breach_count: number;
+  metrics_generated_at: string;
+}
+
+export interface SecurityTrustGateMetricsStore {
+  getSnapshot(input: {
+    window_from: string;
+    window_to: string;
+    now_iso: string;
+  }): Promise<SecurityTrustGateSnapshot>;
+}
+
+export interface SecurityPromotionDecisionRecord {
+  run_id: string;
+  decision_type: 'hold' | 'promote' | 'revert' | 'freeze';
+  previous_mode: SecurityRolloutMode;
+  decided_mode: SecurityRolloutMode;
+  freeze_active: boolean;
+  gate_false_positive_pass: boolean;
+  gate_appeals_sla_pass: boolean;
+  gate_backlog_pass: boolean;
+  window_from: string;
+  window_to: string;
+  trigger: string;
+  evidence: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SecurityPromotionDecisionStore {
+  listRecent(limit: number): Promise<SecurityPromotionDecisionRecord[]>;
+  append(decision: SecurityPromotionDecisionRecord): Promise<void>;
+}
+
+export interface SecurityTrustGateDecisionResult {
+  run_id: string;
+  decision_type: 'hold' | 'promote' | 'revert' | 'freeze';
+  previous_mode: SecurityRolloutMode;
+  decided_mode: SecurityRolloutMode;
+  freeze_active: boolean;
+  gate_false_positive_pass: boolean;
+  gate_appeals_sla_pass: boolean;
+  gate_backlog_pass: boolean;
+  false_positive_pass_streak: number;
+  appeals_sla_pass_streak: number;
+  snapshot: SecurityTrustGateSnapshot;
+  evidence: Record<string, unknown>;
+}
+
+export interface SecurityTrustGateDecisionServiceDependencies {
+  metricsStore: SecurityTrustGateMetricsStore;
+  rolloutStateStore: SecurityRolloutStateStore;
+  decisionStore: SecurityPromotionDecisionStore;
+  now?: () => Date;
+  falsePositiveRateThreshold?: number;
+  appealsSlaThreshold?: number;
+  requiredConsecutiveWindows?: number;
+}
+
+function countConsecutivePasses(
+  decisions: SecurityPromotionDecisionRecord[],
+  key: 'gate_false_positive_pass' | 'gate_appeals_sla_pass'
+): number {
+  let streak = 0;
+  for (const decision of decisions) {
+    if (!decision[key]) {
+      break;
+    }
+    streak += 1;
+  }
+  return streak;
+}
+
+function normalizeRate(rate: number | null): number | null {
+  if (rate === null || !Number.isFinite(rate)) {
+    return null;
+  }
+  if (rate < 0) {
+    return 0;
+  }
+  if (rate > 1) {
+    return 1;
+  }
+  return Number(rate.toFixed(6));
+}
+
+export function createSecurityTrustGateDecisionService(
+  dependencies: SecurityTrustGateDecisionServiceDependencies
+) {
+  const now = dependencies.now ?? (() => new Date());
+  const falsePositiveRateThreshold = dependencies.falsePositiveRateThreshold ?? 0.01;
+  const appealsSlaThreshold = dependencies.appealsSlaThreshold ?? 1;
+  const requiredConsecutiveWindows = dependencies.requiredConsecutiveWindows ?? 2;
+
+  return {
+    async evaluate(input: {
+      run_id: string;
+      window_from: string;
+      window_to: string;
+      trigger: string;
+    }): Promise<SecurityTrustGateDecisionResult> {
+      const createdAt = now().toISOString();
+      const snapshot = await dependencies.metricsStore.getSnapshot({
+        window_from: input.window_from,
+        window_to: input.window_to,
+        now_iso: createdAt
+      });
+      const previousState = await dependencies.rolloutStateStore.getState(createdAt);
+      const recentDecisions = await dependencies.decisionStore.listRecent(12);
+
+      const falsePositivePass =
+        snapshot.false_positive_rate !== null &&
+        snapshot.false_positive_rate <= falsePositiveRateThreshold;
+      const appealsSlaPass =
+        snapshot.appeals_sla_rate !== null &&
+        snapshot.appeals_sla_rate >= appealsSlaThreshold;
+      const backlogPass = snapshot.unresolved_critical_backlog_breach_count === 0;
+
+      const previousFalsePositiveStreak = countConsecutivePasses(
+        recentDecisions,
+        'gate_false_positive_pass'
+      );
+      const previousAppealsStreak = countConsecutivePasses(
+        recentDecisions,
+        'gate_appeals_sla_pass'
+      );
+
+      const falsePositivePassStreak = falsePositivePass ? previousFalsePositiveStreak + 1 : 0;
+      const appealsSlaPassStreak = appealsSlaPass ? previousAppealsStreak + 1 : 0;
+      const promotionReady =
+        falsePositivePassStreak >= requiredConsecutiveWindows &&
+        appealsSlaPassStreak >= requiredConsecutiveWindows &&
+        backlogPass;
+
+      let decidedMode: SecurityRolloutMode = previousState.current_mode;
+      let decisionType: SecurityPromotionDecisionRecord['decision_type'] = 'hold';
+      let freezeActive = previousState.freeze_active;
+      let freezeReason = previousState.freeze_reason;
+
+      if (!promotionReady) {
+        decidedMode = 'raw-only';
+        freezeActive = true;
+        freezeReason = 'gate_regression_or_readiness_failure';
+
+        if (previousState.current_mode === 'full-catalog') {
+          decisionType = 'revert';
+        } else if (previousState.current_mode === 'flagged-first') {
+          decisionType = 'freeze';
+        } else if (!previousState.freeze_active) {
+          decisionType = 'freeze';
+        } else {
+          decisionType = 'hold';
+        }
+      } else {
+        freezeActive = false;
+        freezeReason = null;
+        if (previousState.current_mode === 'raw-only') {
+          decidedMode = 'flagged-first';
+          decisionType = 'promote';
+        } else if (previousState.current_mode === 'flagged-first') {
+          decidedMode = 'full-catalog';
+          decisionType = 'promote';
+        } else {
+          decidedMode = 'full-catalog';
+          decisionType = 'hold';
+        }
+      }
+
+      const evidence: Record<string, unknown> = {
+        false_positive: {
+          numerator: snapshot.false_positive_numerator,
+          denominator: snapshot.false_positive_denominator,
+          rate: normalizeRate(snapshot.false_positive_rate),
+          threshold: falsePositiveRateThreshold,
+          pass_streak: falsePositivePassStreak
+        },
+        appeals_sla: {
+          numerator: snapshot.appeals_sla_numerator,
+          denominator: snapshot.appeals_sla_denominator,
+          rate: normalizeRate(snapshot.appeals_sla_rate),
+          threshold: appealsSlaThreshold,
+          pass_streak: appealsSlaPassStreak
+        },
+        backlog: {
+          unresolved_critical_backlog_breach_count:
+            snapshot.unresolved_critical_backlog_breach_count
+        },
+        required_consecutive_windows: requiredConsecutiveWindows,
+        previous_mode: previousState.current_mode,
+        previous_freeze_active: previousState.freeze_active
+      };
+
+      const decisionRecord: SecurityPromotionDecisionRecord = {
+        run_id: input.run_id,
+        decision_type: decisionType,
+        previous_mode: previousState.current_mode,
+        decided_mode: decidedMode,
+        freeze_active: freezeActive,
+        gate_false_positive_pass: falsePositivePass,
+        gate_appeals_sla_pass: appealsSlaPass,
+        gate_backlog_pass: backlogPass,
+        window_from: input.window_from,
+        window_to: input.window_to,
+        trigger: input.trigger,
+        evidence,
+        created_at: createdAt
+      };
+
+      await dependencies.decisionStore.append(decisionRecord);
+      await dependencies.rolloutStateStore.updateState({
+        current_mode: decidedMode,
+        freeze_active: freezeActive,
+        freeze_reason: freezeReason,
+        decision_run_id: input.run_id,
+        decision_evidence: evidence,
+        updated_at: createdAt
+      });
+
+      return {
+        run_id: input.run_id,
+        decision_type: decisionType,
+        previous_mode: previousState.current_mode,
+        decided_mode: decidedMode,
+        freeze_active: freezeActive,
+        gate_false_positive_pass: falsePositivePass,
+        gate_appeals_sla_pass: appealsSlaPass,
+        gate_backlog_pass: backlogPass,
+        false_positive_pass_streak: falsePositivePassStreak,
+        appeals_sla_pass_streak: appealsSlaPassStreak,
+        snapshot,
+        evidence
+      };
     }
   };
 }

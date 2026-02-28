@@ -1,0 +1,144 @@
+name: Forge Release Gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_path:
+        description: Path to release evidence markdown
+        required: true
+        default: docs/release-evidence.md
+  release:
+    types: [published]
+
+jobs:
+  release-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Required gate - check
+        run: npm run check
+
+      - name: Required gate - migration verification
+        run: npm run verify:migrations:dr018
+
+      - name: Required gate - e2e local
+        run: npm run test:e2e-local
+
+      - name: Required gate - integration-db docker
+        run: npm run test:integration-db:docker
+
+      - name: Verify governance drift
+        run: node scripts/verify-governance-drift.mjs
+
+      - name: Validate release evidence file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EVIDENCE_PATH="${{ github.event.inputs.evidence_path || 'docs/release-evidence.md' }}"
+          if [[ ! -f "$EVIDENCE_PATH" ]]; then
+            echo "Missing required release evidence file: $EVIDENCE_PATH"
+            exit 1
+          fi
+
+          grep -q "STATUS: APPROVED" "$EVIDENCE_PATH" || {
+            echo "Release evidence must include STATUS: APPROVED"
+            exit 1
+          }
+
+          for pattern in "Release Manager:" "Security Reviewer:" "QA Owner:" "Platform Owner:"; do
+            grep -q "$pattern" "$EVIDENCE_PATH" || {
+              echo "Release evidence missing required sign-off field: $pattern"
+              exit 1
+            }
+          done
+
+      - name: Generate release artifacts and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          ARCHIVE_NAME="forge-source-${GITHUB_SHA}.tar.gz"
+          git archive --format=tar.gz --output "artifacts/${ARCHIVE_NAME}" HEAD
+
+          sha256sum "artifacts/${ARCHIVE_NAME}" > artifacts/release.sha256
+
+      - name: Verify signing material is configured
+        shell: bash
+        env:
+          RELEASE_GPG_PRIVATE_KEY_B64: ${{ secrets.FORGE_RELEASE_GPG_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_GPG_PRIVATE_KEY_B64}" ]]; then
+            echo "Missing required secret FORGE_RELEASE_GPG_PRIVATE_KEY_B64"
+            exit 1
+          fi
+
+      - name: Import signing key
+        id: import-key
+        shell: bash
+        env:
+          RELEASE_GPG_PRIVATE_KEY_B64: ${{ secrets.FORGE_RELEASE_GPG_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+
+          KEY_PATH="$(mktemp)"
+          echo "$RELEASE_GPG_PRIVATE_KEY_B64" | base64 -d > "$KEY_PATH"
+          gpg --batch --import "$KEY_PATH"
+          rm -f "$KEY_PATH"
+
+          KEY_ID="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          if [[ -z "$KEY_ID" ]]; then
+            echo "Failed to resolve imported signing key id"
+            exit 1
+          fi
+
+          echo "key_id=$KEY_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Sign checksum manifest
+        shell: bash
+        env:
+          KEY_ID: ${{ steps.import-key.outputs.key_id }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.FORGE_RELEASE_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${RELEASE_GPG_PASSPHRASE}" ]]; then
+            gpg --batch --yes --pinentry-mode loopback --passphrase "${RELEASE_GPG_PASSPHRASE}" \
+              --armor --detach-sign --local-user "$KEY_ID" \
+              --output artifacts/release.sha256.asc artifacts/release.sha256
+          else
+            gpg --batch --yes --armor --detach-sign --local-user "$KEY_ID" \
+              --output artifacts/release.sha256.asc artifacts/release.sha256
+          fi
+
+      - name: Verify checksum signature
+        run: gpg --verify artifacts/release.sha256.asc artifacts/release.sha256
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-release-artifacts
+          path: |
+            artifacts/*.tar.gz
+            artifacts/release.sha256
+            artifacts/release.sha256.asc
+          retention-days: 30

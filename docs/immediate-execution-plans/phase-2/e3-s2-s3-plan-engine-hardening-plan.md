@@ -3,7 +3,7 @@
 Stories: `E3-S2`, `E3-S3`
 Owner: Policy Engine + Control Plane
 Priority: `P0`
-Status: Not Started
+Status: Done (2026-02-28)
 
 ## Objective
 

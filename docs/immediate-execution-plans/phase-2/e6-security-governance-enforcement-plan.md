@@ -3,7 +3,7 @@
 Stories: `E6-S1`, `E6-S2`, `E6-S3`, `E6-S4`
 Owner: Security Governance + Platform + Product Governance
 Priority: `P0`
-Status: Not Started
+Status: In Progress (2026-02-28; implementation complete, governance approvals remain explicit/manual)
 
 ## Objective
 

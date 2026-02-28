@@ -16,17 +16,25 @@ Primary framing lives in the root `README.md`.
 1. Waves 3-7 establish discover/plan/install/verify foundations, retrieval bootstrap, outbox execution, and CI baseline.
 2. Wave 8 delivers profile/bundle lifecycle foundations via migration `012_profile_bundle_foundations.sql`.
 3. Wave 9 delivers SLO rollup and governance automation foundations via migration `013_operational_slo_rollup_foundations.sql`.
-4. Required CI checks are documented in `docs/ci-verification.md`.
-5. Optional Step 10 CI expansions (profile-specific e2e and ops smoke workflow) are intentionally tracked as deferred decisions.
+4. Wave 10 lifecycle expansion is live via migration `014_install_lifecycle_remove_rollback_states.sql` and install lifecycle routes for update/remove/rollback.
+5. Catalog reconciliation/freshness persistence is live via migration `015_catalog_source_freshness_and_reconciliation.sql` and `GET /v1/packages/freshness`.
+6. Step 10 CI expansion is implemented:
+   - required CI runs `npm run test:e2e-local` (includes profile lifecycle coverage),
+   - `.github/workflows/forge-ops-smoke.yml` executes non-blocking nightly/manual dry-run ops smoke checks.
+7. Required CI checks are documented in `docs/ci-verification.md`.
 
 ## Governance and Decision Records
 
 1. ADRs: `docs/adr/`
-2. Application decision records: `application_decision_records.md`
-3. Open questions: `application_master_open_questions.md`, `master_open_questions.md`
-4. Guardrail tracker: `OPEN_QUESTIONS_TRACKER.md`
-5. Implementation-time decision log: `DECISION_LOG.md`
-6. CI verification contract: `docs/ci-verification.md`
+2. Frozen v1 contracts:
+   - `docs/contracts/v1-addon-metadata-contract.md`
+   - `docs/contracts/v1-lifecycle-api-contract.md`
+3. v1 compatibility matrix: `docs/compatibility-matrix.md`
+4. Application decision records: `application_decision_records.md`
+5. Open questions: `application_master_open_questions.md`, `master_open_questions.md`
+6. Guardrail tracker: `OPEN_QUESTIONS_TRACKER.md`
+7. Implementation-time decision log: `DECISION_LOG.md`
+8. CI verification contract: `docs/ci-verification.md`
 
 ## Runbooks
 
