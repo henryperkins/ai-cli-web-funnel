@@ -1,6 +1,12 @@
 name: Forge Release Gates
 
 on:
+  workflow_call:
+    secrets:
+      FORGE_RELEASE_GPG_PRIVATE_KEY_B64:
+        required: true
+      FORGE_RELEASE_GPG_PASSPHRASE:
+        required: false
   workflow_dispatch:
     inputs:
       evidence_path:
