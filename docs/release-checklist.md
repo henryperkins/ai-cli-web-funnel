@@ -18,9 +18,9 @@ Run and record results (PASS/FAIL/BLOCKED with exact blocker text):
 10. `npm run run:security-promotion -- --mode dry-run --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id>` (if DB available)
 
 Recommended local helpers:
-1. `npm run release:prepare -- --mode preflight --channel candidate --version <rc-version> --evidence docs/release-evidence.md`
+1. `npm run release:prepare -- --mode preflight --channel candidate --version <rc-version> --evidence docs/release-evidence.md [--git-ref <sha-from-evidence>]`
 2. `npm run release:apply-signoffs -- --file docs/release-evidence.md --release-manager "<name>" --security-reviewer "<name>" --qa-owner "<name>" --platform-owner "<name>" --approve --expected-version <rc-version>`
-3. `npm run release:prepare -- --mode package --channel candidate --version <rc-version> --evidence docs/release-evidence.md`
+3. `npm run release:prepare -- --mode package --channel candidate --version <rc-version> --evidence docs/release-evidence.md [--git-ref <sha-from-evidence>]`
 
 ## Required Evidence Package
 
@@ -33,7 +33,8 @@ Create `docs/release-evidence.md` from `docs/release-evidence-template.md` and i
    - replace it with `STATUS: APPROVED` only when all human sign-offs are complete.
 5. completed human sign-offs with no placeholder values (for example no `<pending>` or `<name>` values) before release gating.
 6. a `Release:` line that matches the version resolved by the release workflow.
-7. beta outcomes (`go|blocked|no-go`) and unresolved blockers with owner/date.
+7. a `Commit:` line that identifies the committed source revision intended for the final package step.
+8. beta outcomes (`go|blocked|no-go`) and unresolved blockers with owner/date.
 
 ## Artifact Integrity and Signature Controls
 

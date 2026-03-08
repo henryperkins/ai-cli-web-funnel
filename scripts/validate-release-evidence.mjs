@@ -30,8 +30,23 @@ function normalizeReleaseReference(value) {
   return value.trim().replace(/^v/i, '');
 }
 
+function normalizeCommitReference(value) {
+  return value.trim().toLowerCase();
+}
+
 function normalizeSignoffValue(value) {
   return value.trim();
+}
+
+function commitReferencesMatch(actualCommit, expectedCommit) {
+  const normalizedActual = normalizeCommitReference(actualCommit);
+  const normalizedExpected = normalizeCommitReference(expectedCommit);
+
+  return (
+    normalizedActual === normalizedExpected ||
+    normalizedActual.startsWith(normalizedExpected) ||
+    normalizedExpected.startsWith(normalizedActual)
+  );
 }
 
 function isPlaceholderValue(value) {
@@ -48,6 +63,7 @@ export function parseReleaseEvidence(content) {
     match[1].trim().toUpperCase()
   );
   const releaseMatch = /^Release:\s*`?([^`\n]+)`?\s*$/m.exec(content);
+  const commitMatch = /^Commit:\s*`?([^`\n]+)`?\s*$/m.exec(content);
   const signoffMatches = [...content.matchAll(/^- ([A-Za-z ]+):\s*(.+)\s*$/gm)];
 
   const signoffs = {};
@@ -60,6 +76,7 @@ export function parseReleaseEvidence(content) {
   return {
     statuses: statusMatches,
     releaseReference: releaseMatch ? releaseMatch[1].trim() : null,
+    commitReference: commitMatch ? commitMatch[1].trim() : null,
     signoffs
   };
 }
@@ -69,7 +86,8 @@ export function validateReleaseEvidence(
   {
     requireApprovedStatus = false,
     requireCompletedSignoffs = false,
-    expectedVersion = null
+    expectedVersion = null,
+    expectedCommit = null
   } = {}
 ) {
   const parsed = parseReleaseEvidence(content);
@@ -100,6 +118,16 @@ export function validateReleaseEvidence(
     errors.push(
       `Release line "${parsed.releaseReference}" does not match expected version "${expectedVersion}".`
     );
+  }
+
+  if (expectedCommit) {
+    if (!parsed.commitReference) {
+      errors.push('Missing Commit line.');
+    } else if (!commitReferencesMatch(parsed.commitReference, expectedCommit)) {
+      errors.push(
+        `Commit line "${parsed.commitReference}" does not match expected commit "${expectedCommit}".`
+      );
+    }
   }
 
   for (const role of REQUIRED_SIGNOFFS) {
@@ -135,7 +163,8 @@ export function runCli(argv = process.argv) {
       requireCompletedSignoffs:
         hasFlag('--require-complete-signoffs', argv) ||
         hasFlag('--require-approved-status', argv),
-      expectedVersion: getArg('--expected-version', argv)
+      expectedVersion: getArg('--expected-version', argv),
+      expectedCommit: getArg('--expected-commit', argv)
     });
 
     if (!result.ok) {
@@ -152,7 +181,8 @@ export function runCli(argv = process.argv) {
         payload: {
           file: filePath,
           status: result.parsed.statuses[0],
-          release: result.parsed.releaseReference
+          release: result.parsed.releaseReference,
+          commit: result.parsed.commitReference
         }
       })
     );

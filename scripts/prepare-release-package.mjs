@@ -40,6 +40,18 @@ function runGpg(args, env = process.env) {
   });
 }
 
+export function resolveGitTarget(gitRef = 'HEAD', gitRunner = runGit) {
+  const resolvedRef = gitRef.trim() || 'HEAD';
+  const fullSha = gitRunner(['rev-parse', '--verify', `${resolvedRef}^{commit}`]);
+  const shortSha = gitRunner(['rev-parse', '--short', fullSha]);
+
+  return {
+    gitRef: resolvedRef,
+    fullSha,
+    shortSha
+  };
+}
+
 export function buildReleaseArtifactNames({
   channel,
   version,
@@ -207,6 +219,8 @@ export function runCli(argv = process.argv) {
   const evidencePath = getArg('--evidence', argv) ?? 'docs/release-evidence.md';
   const artifactsDir = getArg('--artifacts-dir', argv) ?? 'artifacts';
   const releaseTag = getArg('--release-tag', argv) ?? `v${version}`;
+  const explicitGitRef = getArg('--git-ref', argv);
+  const gitRef = explicitGitRef ?? 'HEAD';
 
   if (!version) {
     console.error('--version is required.');
@@ -219,15 +233,18 @@ export function runCli(argv = process.argv) {
       version,
       releaseTag
     });
+    const gitTarget = resolveGitTarget(gitRef);
 
     const evidenceContent = readFileSync(evidencePath, 'utf8');
     const structuralEvidence = validateReleaseEvidence(evidenceContent, {
-      expectedVersion: version
+      expectedVersion: version,
+      expectedCommit: explicitGitRef ? gitTarget.shortSha : null
     });
     const approvedEvidence = validateReleaseEvidence(evidenceContent, {
       expectedVersion: version,
       requireApprovedStatus: true,
-      requireCompletedSignoffs: true
+      requireCompletedSignoffs: true,
+      expectedCommit: explicitGitRef ? gitTarget.shortSha : null
     });
     const worktreeDirty = runGit(['status', '--porcelain']).length > 0;
     const signingKeyAvailable =
@@ -242,11 +259,10 @@ export function runCli(argv = process.argv) {
       signingKeyAvailable
     });
 
-    const sha = runGit(['rev-parse', '--short', 'HEAD']);
     const names = buildReleaseArtifactNames({
       channel: policy.channel,
       version: policy.version,
-      sha,
+      sha: gitTarget.shortSha,
       artifactsDir
     });
 
@@ -263,7 +279,8 @@ export function runCli(argv = process.argv) {
         channel: policy.channel,
         version: policy.version,
         release_tag: releaseTag,
-        git_sha: sha,
+        git_ref: gitTarget.gitRef,
+        git_sha: gitTarget.shortSha,
         ready: readiness.ready,
         worktree_dirty: worktreeDirty,
         evidence_path: evidencePath,
@@ -293,7 +310,7 @@ export function runCli(argv = process.argv) {
 
     mkdirSync(artifactsDir, { recursive: true });
 
-    runGit(['archive', '--format=tar.gz', '--output', names.archivePath, 'HEAD']);
+    runGit(['archive', '--format=tar.gz', '--output', names.archivePath, gitTarget.fullSha]);
     const checksum = sha256File(names.archivePath);
     writeFileSync(
       names.checksumPath,

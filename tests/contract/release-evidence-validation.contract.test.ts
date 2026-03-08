@@ -25,7 +25,8 @@ describe('contract: release evidence validation', () => {
     const result = validateReleaseEvidence(baseContent, {
       requireApprovedStatus: true,
       requireCompletedSignoffs: true,
-      expectedVersion: '0.2.0-rc.1'
+      expectedVersion: '0.2.0-rc.1',
+      expectedCommit: 'db5ee5901234567890abcdef'
     });
 
     expect(result.ok).toBe(true);
@@ -75,11 +76,26 @@ describe('contract: release evidence validation', () => {
     );
   });
 
+  it('rejects release evidence whose commit does not match the expected source revision', () => {
+    const result = validateReleaseEvidence(baseContent, {
+      requireApprovedStatus: true,
+      requireCompletedSignoffs: true,
+      expectedVersion: '0.2.0-rc.1',
+      expectedCommit: 'abc1234'
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      'Commit line "db5ee59" does not match expected commit "abc1234".'
+    );
+  });
+
   it('parses status, release reference, and sign-offs from markdown', () => {
     const parsed = parseReleaseEvidence(baseContent);
 
     expect(parsed.statuses).toEqual(['APPROVED']);
     expect(parsed.releaseReference).toBe('v0.2.0-rc.1');
+    expect(parsed.commitReference).toBe('db5ee59');
     expect(parsed.signoffs['Platform Owner']).toBe('Dana');
   });
 });
