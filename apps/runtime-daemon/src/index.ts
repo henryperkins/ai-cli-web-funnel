@@ -26,6 +26,13 @@ export interface RuntimeScopeResolution {
   blocked_scopes: RuntimeScopeCandidate[];
 }
 
+export interface ProcessCommand {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+}
+
 export interface RuntimeStartRequest {
   package_id: string;
   package_slug: string;
@@ -36,6 +43,7 @@ export interface RuntimeStartRequest {
   trust_reset_trigger: TrustResetTrigger;
   scope_candidates: RuntimeScopeCandidate[];
   policy_input: PolicyPreflightInput;
+  process_command?: ProcessCommand;
 }
 
 export interface RuntimePolicyClient {

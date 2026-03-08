@@ -25,6 +25,19 @@ services:
     volumes:
       - forge_qdrant_storage:/qdrant/storage
 
+  runtime-daemon:
+    build:
+      context: .
+      dockerfile: apps/runtime-daemon/Dockerfile
+    ports:
+      - "4100:4100"
+    environment:
+      FORGE_DAEMON_PORT: "4100"
+      FORGE_RUNTIME_LOCAL_SUPERVISOR_ENABLED: "true"
+      FORGE_RUNTIME_SCOPE_SIDECAR_OWNERSHIP_ENABLED: "true"
+    depends_on:
+      - postgres
+
 volumes:
   forge_pg_data:
   forge_qdrant_storage:

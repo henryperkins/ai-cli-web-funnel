@@ -1,5 +1,3 @@
-import type { RuntimeRemoteConfigEnv } from './runtime-remote-config.js';
-
 export interface ControlPlaneStartupEnvValidationResult {
   ok: boolean;
   errors: string[];
@@ -25,7 +23,7 @@ function hasValue(value: string | undefined): boolean {
 }
 
 export function validateControlPlaneStartupEnv(
-  env: NodeJS.ProcessEnv & RuntimeRemoteConfigEnv
+  env: Readonly<Record<string, string | undefined>>
 ): ControlPlaneStartupEnvValidationResult {
   const errors: string[] = [];
 
@@ -56,35 +54,44 @@ export function validateControlPlaneStartupEnv(
     }
   }
 
-  const remoteSseEnabled = parseBoolean(env.FORGE_RUNTIME_REMOTE_SSE_ENABLED);
-  if (remoteSseEnabled === null && env.FORGE_RUNTIME_REMOTE_SSE_ENABLED !== undefined) {
-    errors.push('FORGE_RUNTIME_REMOTE_SSE_ENABLED must be one of 1,true,yes,on,0,false,no,off');
-  }
-  if (remoteSseEnabled && !hasValue(env.FORGE_RUNTIME_REMOTE_SSE_URL)) {
-    errors.push(
-      'FORGE_RUNTIME_REMOTE_SSE_URL is required when FORGE_RUNTIME_REMOTE_SSE_ENABLED=true'
-    );
-  }
+  const usesStandaloneRuntimeDaemon = hasValue(env.FORGE_RUNTIME_DAEMON_URL);
 
-  const remoteHttpEnabled = parseBoolean(env.FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED);
-  if (
-    remoteHttpEnabled === null &&
-    env.FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED !== undefined
-  ) {
-    errors.push(
-      'FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED must be one of 1,true,yes,on,0,false,no,off'
-    );
-  }
-  if (remoteHttpEnabled && !hasValue(env.FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_URL)) {
-    errors.push(
-      'FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_URL is required when FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED=true'
-    );
-  }
+  if (!usesStandaloneRuntimeDaemon) {
+    const remoteSseEnabled = parseBoolean(env.FORGE_RUNTIME_REMOTE_SSE_ENABLED);
+    if (remoteSseEnabled === null && env.FORGE_RUNTIME_REMOTE_SSE_ENABLED !== undefined) {
+      errors.push(
+        'FORGE_RUNTIME_REMOTE_SSE_ENABLED must be one of 1,true,yes,on,0,false,no,off'
+      );
+    }
+    if (remoteSseEnabled && !hasValue(env.FORGE_RUNTIME_REMOTE_SSE_URL)) {
+      errors.push(
+        'FORGE_RUNTIME_REMOTE_SSE_URL is required when FORGE_RUNTIME_REMOTE_SSE_ENABLED=true'
+      );
+    }
 
-  if (hasValue(env.FORGE_RUNTIME_REMOTE_AUTH_TYPE) && !hasValue(env.FORGE_RUNTIME_REMOTE_SECRET_REF)) {
-    errors.push(
-      'FORGE_RUNTIME_REMOTE_SECRET_REF is required when FORGE_RUNTIME_REMOTE_AUTH_TYPE is set'
-    );
+    const remoteHttpEnabled = parseBoolean(env.FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED);
+    if (
+      remoteHttpEnabled === null &&
+      env.FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED !== undefined
+    ) {
+      errors.push(
+        'FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED must be one of 1,true,yes,on,0,false,no,off'
+      );
+    }
+    if (remoteHttpEnabled && !hasValue(env.FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_URL)) {
+      errors.push(
+        'FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_URL is required when FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED=true'
+      );
+    }
+
+    if (
+      hasValue(env.FORGE_RUNTIME_REMOTE_AUTH_TYPE) &&
+      !hasValue(env.FORGE_RUNTIME_REMOTE_SECRET_REF)
+    ) {
+      errors.push(
+        'FORGE_RUNTIME_REMOTE_SECRET_REF is required when FORGE_RUNTIME_REMOTE_AUTH_TYPE is set'
+      );
+    }
   }
 
   return {

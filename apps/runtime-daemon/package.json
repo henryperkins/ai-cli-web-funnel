@@ -10,6 +10,30 @@
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./daemon-env-validation": {
+      "types": "./src/daemon-env-validation.ts",
+      "default": "./dist/daemon-env-validation.js"
+    },
+    "./daemon-feature-flags": {
+      "types": "./src/daemon-feature-flags.ts",
+      "default": "./dist/daemon-feature-flags.js"
+    },
+    "./daemon-http-app": {
+      "types": "./src/daemon-http-app.ts",
+      "default": "./dist/daemon-http-app.js"
+    },
+    "./daemon-main": {
+      "types": "./src/daemon-main.ts",
+      "default": "./dist/daemon-main.js"
+    },
+    "./daemon-remote-config": {
+      "types": "./src/daemon-remote-config.ts",
+      "default": "./dist/daemon-remote-config.js"
+    },
+    "./http-probe-client": {
+      "types": "./src/http-probe-client.ts",
+      "default": "./dist/http-probe-client.js"
+    },
     "./local-supervisor": {
       "types": "./src/local-supervisor.ts",
       "default": "./dist/local-supervisor.js"
@@ -29,10 +53,15 @@
     "./scope-sidecar": {
       "types": "./src/scope-sidecar.ts",
       "default": "./dist/scope-sidecar.js"
+    },
+    "./stdio-process-launcher": {
+      "types": "./src/stdio-process-launcher.ts",
+      "default": "./dist/stdio-process-launcher.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/daemon-main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run tests"
   }

@@ -3,14 +3,15 @@ import {
   createOAuthClientCredentialsTokenClient,
   type OAuthClientCredentialsTokenClientOptions,
   type OAuthTokenExchangeLogger
-} from '@forge/runtime-daemon/oauth-token-client';
+} from './oauth-token-client.js';
+import { createHttpProbeClient } from './http-probe-client.js';
 import type {
   RemoteConnectorResolver,
   RemoteEndpointAuth,
   RemoteEndpointConfig,
   RemoteProbeClient,
   SecretRefResolver
-} from '@forge/runtime-daemon/remote-connectors';
+} from './remote-connectors.js';
 
 export type RuntimeRemoteConfigEnv = Readonly<Record<string, string | undefined>>;
 
@@ -117,7 +118,7 @@ export function createRuntimeRemoteResolverFromEnv(
 ): RemoteConnectorResolver {
   const sseUrl = asOptionalTrimmed(env.FORGE_RUNTIME_REMOTE_SSE_URL);
   const streamableHttpUrl = asOptionalTrimmed(env.FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_URL);
-  const auth = resolveRemoteAuth(env);
+  const auth = sseUrl || streamableHttpUrl ? resolveRemoteAuth(env) : undefined;
 
   const config: RemoteEndpointConfig | null =
     sseUrl || streamableHttpUrl
@@ -166,45 +167,9 @@ export function createSecretRefResolver(options: {
 export function createFetchBackedRemoteProbeClient(
   fetchImpl: typeof fetch = fetch
 ): RemoteProbeClient {
-  async function probe(
-    url: string,
-    headers: Record<string, string>
-  ): Promise<{ ok: boolean; status?: number; details?: string }> {
-    try {
-      const response = await fetchImpl(url, {
-        method: 'GET',
-        headers,
-        redirect: 'manual'
-      });
-
-      return {
-        ok: response.ok,
-        status: response.status,
-        details: response.ok ? 'probe_ok' : 'probe_http_error'
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        details: error instanceof Error ? error.message : 'probe_request_failed'
-      };
-    }
-  }
-
-  return {
-    async probeSse(url, headers) {
-      return probe(url, {
-        Accept: 'text/event-stream',
-        ...headers
-      });
-    },
-
-    async probeStreamableHttp(url, headers) {
-      return probe(url, {
-        Accept: 'application/json',
-        ...headers
-      });
-    }
-  };
+  return createHttpProbeClient({
+    fetchImpl
+  });
 }
 
 export function createRuntimeOAuthTokenClientFromEnv(

@@ -31,7 +31,6 @@ import {
   type PostgresQueryExecutor as SecurityPostgresQueryExecutor
 } from '@forge/security-governance/postgres-adapters';
 import { evaluatePolicyPreflight } from '@forge/policy-engine';
-import { createRuntimeDaemonBootstrap } from '@forge/runtime-daemon/runtime-bootstrap';
 import type { CopilotAdapterContract } from '@forge/copilot-vscode-adapter';
 import type { IngestionDependencies } from './index.js';
 import { createCatalogRouteService } from './catalog-routes.js';
@@ -39,13 +38,6 @@ import { createProfileRouteService, type ProfileRouteService } from './profile-r
 import { createProfilePostgresAdapters } from './profile-postgres-adapters.js';
 import { createEventIngestionHttpHandler } from './http-handler.js';
 import { resolveRuntimeFeatureFlagsFromEnv } from './runtime-feature-flags.js';
-import {
-  createFetchBackedRemoteProbeClient,
-  createRuntimeOAuthTokenClientFromEnv,
-  createSecretRefResolver,
-  createRuntimeRemoteResolverFromEnv,
-  createSecretRefResolverFromEnv
-} from './runtime-remote-config.js';
 import {
   createDbBackedReporterSignatureVerifier,
   createDefaultCopilotAdapterForLifecycle,
@@ -56,7 +48,7 @@ import {
   type InstallRuntimeVerifier,
   type PostgresTransactionalQueryExecutor
 } from './install-lifecycle.js';
-import type { SecretRefResolver } from '@forge/runtime-daemon/remote-connectors';
+import { createRuntimeDaemonClient } from './runtime-daemon-client.js';
 import {
   createPostgresFraudFlagPipeline,
   createPostgresIdempotencyAdapter,
@@ -184,9 +176,12 @@ export interface ForgeHttpAppPostgresDependencies {
   copilotAdapter?: CopilotAdapterContract;
   runtimeVerifier?: InstallRuntimeVerifier;
   installLogger?: InstallLifecycleLogger;
-  featureFlagEnv?: NodeJS.ProcessEnv;
-  secretResolver?: SecretRefResolver;
+  daemonUrl?: string;
 }
+
+type ScopeSidecarGuardRequest = Parameters<
+  NonNullable<InstallRuntimeVerifier['writeScopeSidecarGuarded']>
+>[0];
 
 function jsonResponse(
   statusCode: number,
@@ -1199,70 +1194,144 @@ export function createForgeHttpAppFromPostgres(
   const runtimeVerifier =
     dependencies.runtimeVerifier ??
     (() => {
-      const featureFlags = resolveRuntimeFeatureFlagsFromEnv({
-        ...(dependencies.featureFlagEnv
-          ? { env: dependencies.featureFlagEnv }
-          : {})
-      });
+      const daemonUrl = dependencies.daemonUrl ?? process.env.FORGE_RUNTIME_DAEMON_URL;
+      const daemonClient = daemonUrl
+        ? createRuntimeDaemonClient({
+            daemonUrl
+          })
+        : null;
 
-      const runtimeLogger = {
-        log(event: { event_name: string; occurred_at: string; payload: Record<string, unknown> }) {
-          console.log(JSON.stringify(event));
+      let fallbackVerifierPromise: Promise<InstallRuntimeVerifier> | null = null;
+
+      async function writeScopeSidecarLocally(
+        request: ScopeSidecarGuardRequest
+      ): Promise<{ ok: boolean; reason_code: string | null }> {
+        const featureFlags = resolveRuntimeFeatureFlagsFromEnv();
+        if (!featureFlags.runtime.scopeSidecarOwnershipEnabled) {
+          return {
+            ok: false,
+            reason_code: 'runtime_scope_sidecar_ownership_disabled'
+          };
         }
-      };
 
-      const bootstrap = createRuntimeDaemonBootstrap({
-        featureFlags,
-        policyClient: {
-          async preflight(input) {
-            return evaluatePolicyPreflight(input);
+        if (!request.scope_daemon_owned) {
+          return {
+            ok: false,
+            reason_code: 'runtime_scope_not_daemon_owned'
+          };
+        }
+
+        const checksum = createHash('sha256')
+          .update(
+            JSON.stringify({
+              package_id: request.record.package_id,
+              package_slug: request.record.package_slug,
+              plan_id: request.record.plan_id,
+              scope_path: request.record.scope_path
+            })
+          )
+          .digest('hex');
+
+        const { writeScopeSidecar } = await import('@forge/runtime-daemon/scope-sidecar');
+        await writeScopeSidecar(
+          request.scope_hash,
+          {
+            managed_by: 'control-plane',
+            client: 'vscode_copilot',
+            scope_path: request.record.scope_path,
+            entry_keys: [request.record.package_id, request.record.plan_id, request.record.scope],
+            checksum,
+            last_applied_at: request.record.applied_at
+          },
+          {
+            ...(request.options?.baseDir ? { baseDir: request.options.baseDir } : {}),
+            owner: request.options?.owner ?? 'control-plane',
+            allowMerge: request.options?.allowMerge ?? true
           }
-        },
-        remoteResolver: createRuntimeRemoteResolverFromEnv(
-          dependencies.featureFlagEnv
-        ),
-        secretResolver: createSecretRefResolver({
-          ...(dependencies.secretResolver ? { primary: dependencies.secretResolver } : {}),
-          fallback: createSecretRefResolverFromEnv(dependencies.featureFlagEnv)
-        }),
-        remoteProbeClient: createFetchBackedRemoteProbeClient(),
-        oauthTokenClient: createRuntimeOAuthTokenClientFromEnv(runtimeLogger),
-        logger: runtimeLogger
-      });
+        );
+
+        return {
+          ok: true,
+          reason_code: null
+        };
+      }
+
+      async function getFallbackVerifier(): Promise<InstallRuntimeVerifier> {
+        if (!fallbackVerifierPromise) {
+          fallbackVerifierPromise = (async () => {
+            const runtimeLogger = {
+              log(event: {
+                event_name: string;
+                occurred_at: string;
+                payload: Record<string, unknown>;
+              }) {
+                console.log(JSON.stringify(event));
+              }
+            };
+
+            const [
+              { createRuntimeDaemonBootstrap },
+              {
+                createRuntimeRemoteResolverFromEnv,
+                createSecretRefResolver,
+                createSecretRefResolverFromEnv,
+                createRuntimeOAuthTokenClientFromEnv
+              },
+              { createHttpProbeClient }
+            ] = await Promise.all([
+              import('@forge/runtime-daemon/runtime-bootstrap'),
+              import('@forge/runtime-daemon/daemon-remote-config'),
+              import('@forge/runtime-daemon/http-probe-client')
+            ]);
+
+            const bootstrap = createRuntimeDaemonBootstrap({
+              featureFlags: resolveRuntimeFeatureFlagsFromEnv(),
+              policyClient: {
+                async preflight(input) {
+                  return evaluatePolicyPreflight(input);
+                }
+              },
+              remoteResolver: createRuntimeRemoteResolverFromEnv(),
+              secretResolver: createSecretRefResolver({
+                fallback: createSecretRefResolverFromEnv()
+              }),
+              remoteProbeClient: createHttpProbeClient(),
+              oauthTokenClient: createRuntimeOAuthTokenClientFromEnv(runtimeLogger),
+              logger: runtimeLogger
+            });
+
+            return {
+              async run(request) {
+                return bootstrap.run(request);
+              },
+              async writeScopeSidecarGuarded(request) {
+                return writeScopeSidecarLocally(request);
+              }
+            } satisfies InstallRuntimeVerifier;
+          })();
+        }
+
+        return fallbackVerifierPromise;
+      }
+
+      if (daemonClient) {
+        return {
+          async run(request) {
+            return daemonClient.run(request);
+          },
+          async writeScopeSidecarGuarded(request) {
+            return writeScopeSidecarLocally(request);
+          }
+        } satisfies InstallRuntimeVerifier;
+      }
 
       return {
         async run(request) {
-          return bootstrap.run(request);
+          const fallbackVerifier = await getFallbackVerifier();
+          return fallbackVerifier.run(request);
         },
         async writeScopeSidecarGuarded(request) {
-          const checksum = createHash('sha256')
-            .update(
-              JSON.stringify({
-                package_id: request.record.package_id,
-                package_slug: request.record.package_slug,
-                plan_id: request.record.plan_id,
-                scope_path: request.record.scope_path
-              })
-            )
-            .digest('hex');
-
-          return bootstrap.writeScopeSidecarGuarded({
-            scope_hash: request.scope_hash,
-            scope_daemon_owned: request.scope_daemon_owned,
-            record: {
-              managed_by: 'control-plane',
-              client: 'vscode_copilot',
-              scope_path: request.record.scope_path,
-              entry_keys: [request.record.package_id, request.record.plan_id, request.record.scope],
-              checksum,
-              last_applied_at: request.record.applied_at
-            },
-            options: {
-              ...(request.options?.baseDir ? { baseDir: request.options.baseDir } : {}),
-              owner: request.options?.owner ?? 'control-plane',
-              allowMerge: request.options?.allowMerge ?? true
-            }
-          });
+          return writeScopeSidecarLocally(request);
         }
       } satisfies InstallRuntimeVerifier;
     })();

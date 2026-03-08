@@ -48,6 +48,18 @@ describe('control-plane startup env validation', () => {
     );
   });
 
+  it('skips remote runtime env validation when FORGE_RUNTIME_DAEMON_URL is configured', () => {
+    const result = validateControlPlaneStartupEnv({
+      FORGE_DATABASE_URL: 'postgres://example.invalid/forge',
+      FORGE_RUNTIME_DAEMON_URL: 'http://127.0.0.1:4100',
+      FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED: 'maybe',
+      FORGE_RUNTIME_REMOTE_AUTH_TYPE: 'bearer'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
   it('throws deterministic config error in loadControlPlaneEnvConfig for invalid startup env', () => {
     expect(() =>
       loadControlPlaneEnvConfig({

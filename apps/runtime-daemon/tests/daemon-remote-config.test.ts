@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createRuntimeDaemonBootstrap } from '@forge/runtime-daemon/runtime-bootstrap';
-import { resolveRuntimeFeatureFlagsFromEnv } from '../src/runtime-feature-flags.js';
+import { createRuntimeDaemonBootstrap } from '../src/runtime-bootstrap.js';
+import { resolveRuntimeFeatureFlagsFromEnv } from '../src/daemon-feature-flags.js';
 import {
   createFetchBackedRemoteProbeClient,
   createRuntimeOAuthTokenClientFromEnv,
   createSecretRefResolver,
   createRuntimeRemoteResolverFromEnv,
   createSecretRefResolverFromEnv
-} from '../src/runtime-remote-config.js';
+} from '../src/daemon-remote-config.js';
 
 function buildRemoteRequest() {
   return {
@@ -60,8 +60,8 @@ function buildAllowedPolicyClient() {
   };
 }
 
-describe('runtime remote config integration', () => {
-  it('falls back from primary secret resolver to env-map resolver deterministically', async () => {
+describe('daemon remote config integration', () => {
+  it('falls back from the primary secret resolver to the env-map resolver', async () => {
     const resolver = createSecretRefResolver({
       primary: {
         async resolve(secretRef: string) {
@@ -83,7 +83,7 @@ describe('runtime remote config integration', () => {
     expect(await resolver.resolve('sec://missing')).toBeNull();
   });
 
-  it('returns deterministic missing secret_ref failure', async () => {
+  it('returns a deterministic missing secret_ref failure', async () => {
     const env = {
       FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_URL: 'https://remote.example.test/stream',
       FORGE_RUNTIME_REMOTE_AUTH_TYPE: 'bearer',
@@ -100,7 +100,7 @@ describe('runtime remote config integration', () => {
       remoteResolver: createRuntimeRemoteResolverFromEnv(env),
       secretResolver: createSecretRefResolverFromEnv({}),
       remoteProbeClient: createFetchBackedRemoteProbeClient(async () => {
-        throw new Error('probe should not run without auth header');
+        throw new Error('probe should not run without an auth header');
       })
     });
 
@@ -113,7 +113,7 @@ describe('runtime remote config integration', () => {
     ]);
   });
 
-  it('returns deterministic oauth exchange failure when token endpoint fails', async () => {
+  it('returns a deterministic oauth exchange failure when the token endpoint fails', async () => {
     const env = {
       FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_URL: 'https://remote.example.test/stream',
       FORGE_RUNTIME_REMOTE_AUTH_TYPE: 'oauth2_client_credentials',
@@ -153,7 +153,7 @@ describe('runtime remote config integration', () => {
     ]);
   });
 
-  it('reuses oauth token cache across repeated remote probes', async () => {
+  it('reuses the oauth token cache across repeated remote probes', async () => {
     let tokenFetchCalls = 0;
     let probeCalls = 0;
 
@@ -180,15 +180,12 @@ describe('runtime remote config integration', () => {
       if (url === 'https://remote.example.test/stream') {
         probeCalls += 1;
         const headers = (init?.headers as Record<string, string>) ?? {};
-        return new Response(
-          JSON.stringify({ ok: true }),
-          {
-            status: headers.Authorization === 'Bearer cached-token' ? 200 : 401,
-            headers: {
-              'content-type': 'application/json'
-            }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: headers.Authorization === 'Bearer cached-token' ? 200 : 401,
+          headers: {
+            'content-type': 'application/json'
           }
-        );
+        });
       }
 
       return new Response('not found', { status: 404 });

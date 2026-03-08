@@ -1,3 +1,5 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +8,13 @@ import { createCopilotVscodeAdapterContract } from '../../apps/copilot-vscode-ad
 import { createRuntimeDaemonBootstrap } from '../../apps/runtime-daemon/src/runtime-bootstrap.js';
 import { readScopeSidecar } from '../../apps/runtime-daemon/src/scope-sidecar.js';
 import { resolveFeatureFlags } from '../../packages/shared-contracts/src/feature-flags.js';
+
+const DAEMON_ENTRY = join(import.meta.dirname, '../../apps/runtime-daemon/dist/daemon-main.js');
+const ECHO_FIXTURE = join(
+  import.meta.dirname,
+  '../../apps/runtime-daemon/tests/fixtures/echo-server.mjs'
+);
+const daemonHttpIt = existsSync(DAEMON_ENTRY) ? it : it.skip;
 
 describe('e2e local: adapter + runtime composition', () => {
   it('writes adapter config and verifies runtime readiness with sidecar ownership update', async () => {
@@ -167,5 +176,119 @@ describe('e2e local: adapter + runtime composition', () => {
     });
 
     await rm(workspace, { recursive: true, force: true });
+  });
+
+  daemonHttpIt('verifies runtime readiness through the daemon HTTP endpoint', async () => {
+    let daemon: ChildProcess | null = null;
+    let stderr = '';
+
+    try {
+      daemon = spawn('node', [DAEMON_ENTRY], {
+        env: {
+          ...process.env,
+          FORGE_DAEMON_PORT: '4199',
+          FORGE_RUNTIME_LOCAL_SUPERVISOR_ENABLED: 'true',
+          FORGE_RUNTIME_SCOPE_SIDECAR_OWNERSHIP_ENABLED: 'true'
+        },
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      daemon.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf-8');
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error(`daemon startup timeout${stderr ? `: ${stderr}` : ''}`));
+        }, 5_000);
+
+        daemon?.stdout?.on('data', (chunk: Buffer) => {
+          if (chunk.toString('utf-8').includes('daemon.started')) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+
+        daemon?.once('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+
+        daemon?.once('exit', (code, signal) => {
+          clearTimeout(timeout);
+          reject(
+            new Error(
+              `daemon exited before ready code=${code ?? 'null'} signal=${signal ?? 'null'}${
+                stderr ? ` stderr=${stderr}` : ''
+              }`
+            )
+          );
+        });
+      });
+
+      const response = await fetch('http://127.0.0.1:4199/v1/runtime/verify', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          package_id: 'pkg-e2e-http',
+          package_slug: 'acme/e2e-http',
+          mode: 'local',
+          transport: 'stdio',
+          trust_state: 'trusted',
+          trust_reset_trigger: 'none',
+          scope_candidates: [],
+          policy_input: {
+            org_id: 'org-e2e',
+            package_id: 'pkg-e2e-http',
+            requested_permissions: [],
+            org_policy: {
+              mcp_enabled: true,
+              server_allowlist: ['pkg-e2e-http'],
+              block_flagged: false,
+              permission_caps: {
+                maxPermissions: 5,
+                disallowedPermissions: []
+              }
+            },
+            enforcement: {
+              package_id: 'pkg-e2e-http',
+              state: 'none',
+              reason_code: null,
+              policy_blocked: false,
+              source: 'none',
+              updated_at: '2026-03-01T14:00:00Z'
+            }
+          },
+          process_command: {
+            command: 'node',
+            args: [ECHO_FIXTURE]
+          }
+        })
+      });
+
+      expect(response.ok).toBe(true);
+      const result = await response.json();
+      expect(result.ready).toBe(true);
+
+      const healthResponse = await fetch('http://127.0.0.1:4199/health');
+      expect(healthResponse.ok).toBe(true);
+    } finally {
+      if (daemon) {
+        if (daemon.exitCode === null && daemon.signalCode === null) {
+          daemon.kill('SIGTERM');
+        }
+
+        await new Promise<void>((resolve) => {
+          if (daemon?.exitCode !== null || daemon?.signalCode !== null) {
+            resolve();
+            return;
+          }
+
+          daemon?.once('exit', () => resolve());
+        });
+      }
+    }
   });
 });
