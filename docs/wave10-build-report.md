@@ -3,6 +3,10 @@
 Date: 2026-02-28
 Scope: Post-Phase-2 release-candidate and beta-readiness closure (migration/doc parity, trust-gate operationalization, E9-S4 distribution policy, E10 launch artifacts).
 
+Historical note:
+1. This report captures the repository state as of `2026-02-28`.
+2. For current execution status after release hardening and pre-pilot validation, use `docs/application-completion-backlog.md`, `docs/release-evidence.md`, and `docs/ga-readiness-review-2026-03-08.md`.
+
 ## 1) Step-by-step implementation summary (Step 1..10)
 
 1. Step 1 (Phase 3 execution index): completed.
@@ -71,7 +75,7 @@ Lock-risk and rollback notes:
 
 No AQ/MQ/DR status was silently changed from `Open`/`Proposed` to `Approved` in this change set.
 
-## 6) E9-S4 and E10 status snapshot
+## 6) E9-S4 and E10 status snapshot (as of 2026-02-28)
 
 | Story | Status | Notes |
 | --- | --- | --- |

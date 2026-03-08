@@ -3,7 +3,7 @@
 Story: `E10-S1`
 Owner: Product + Platform
 Priority: `P0`
-Status: In Progress (2026-02-28)
+Status: Ready for Execution (2026-03-08)
 
 ## Objective
 
@@ -45,3 +45,30 @@ Ship an executable beta pilot package with defined cohort, onboarding path, KPI 
 1. Beta pilot execution package is complete and runnable.
 2. KPI collection path is deterministic and documented.
 3. Go/no-go criteria are explicit and tied to measurable evidence.
+
+## Readiness Evidence (2026-03-08)
+
+### Artifacts validated
+
+| Artifact | Status |
+| --- | --- |
+| `docs/beta-pilot-plan.md` | Complete (cohort, onboarding, KPI matrix, go/no-go rules) |
+| `docs/ga-readiness-review-template.md` | Complete (6-section template) |
+| `scripts/run-beta-readiness-report.mjs` | Complete and validated against live Postgres |
+| `docs/ga-readiness-review-2026-03-08.md` | Pre-pilot baseline review populated from live pipeline |
+| `artifacts/beta-readiness-report.json` | Production artifact generated during baseline validation |
+
+### Pipeline validation
+
+| Command | Result |
+| --- | --- |
+| `npm run run:slo-rollup -- --mode production --from 2026-03-01T00:00:00Z --to 2026-03-08T23:59:59Z --limit 100` | PASS — 10 metrics persisted |
+| `npm run run:beta-readiness -- --mode dry-run --from 2026-03-01T00:00:00Z --to 2026-03-08T23:59:59Z` | PASS — go_no_go=blocked (expected) |
+| `npm run run:beta-readiness -- --mode production --from 2026-03-01T00:00:00Z --to 2026-03-08T23:59:59Z --output artifacts/beta-readiness-report.json` | PASS — artifact persisted |
+
+### Baseline readiness status
+
+- go_no_go: `blocked` (all 8 KPIs report `insufficient_data` — expected for pre-pilot baseline)
+- Pipeline validated: SLO snapshots → beta-readiness query → KPI evaluation → go/no-go → artifact
+- Live pilot execution: not started yet
+- Next action: re-run after cohort traffic generates >= 20 lifecycle events

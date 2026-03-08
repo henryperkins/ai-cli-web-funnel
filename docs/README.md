@@ -24,7 +24,19 @@ Primary framing lives in the root `README.md`.
    - `.github/workflows/forge-ops-smoke.yml` executes non-blocking nightly/manual dry-run ops smoke checks.
 8. Required CI checks are documented in `docs/ci-verification.md`.
 9. Phase 2 `P0` execution plans are closed, including `E6` governance closure tracking and release-gated approval controls (`docs/immediate-execution-plans/phase-2/README.md`, `docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`).
-10. Phase 3 execution index is active for release-candidate, distribution policy, and beta/GA artifacts (`docs/immediate-execution-plans/phase-3/README.md`).
+10. Phase 3 execution index remains active for release-candidate, beta, and GA execution work (`docs/immediate-execution-plans/phase-3/README.md`).
+11. Current Phase 3 posture:
+   - `E9-S4` distribution policy is validated in workflow/scripts/docs, but release evidence remains draft until sign-off and CI signature completion.
+   - `E10-S1` beta pilot tooling is ready for execution, but pilot traffic has not started yet.
+   - `E10-S2/S3` triage and GA decision work remain in progress.
+
+## Status Vocabulary
+
+1. `Implemented`: code/docs landed but release or pilot evidence is incomplete.
+2. `Validated`: technical checks passed; governed approval or live execution may still be pending.
+3. `Ready for Execution`: the runbook/package exists and is ready for a live operator or pilot run.
+4. `Executed`: live execution completed and evidence captured.
+5. `Approved`: executed evidence reviewed and signed off.
 
 ## Governance and Decision Records
 

@@ -17,6 +17,14 @@ Scope: Complete Forge as a production-ready install broker for CLI addons (MCP s
 2. `P1`: Required for stable scale after GA.
 3. `P2`: Optimization/expansion.
 
+## Status Vocabulary
+
+1. `Implemented`: code/docs landed but release/pilot execution evidence is not yet complete.
+2. `Validated`: implementation and technical verification are complete; governed approval or live execution may still be pending.
+3. `Ready for Execution`: operator package or pilot kit is complete, but the live run has not happened yet.
+4. `Executed`: live run completed and evidence was captured.
+5. `Approved`: executed evidence reviewed and signed off.
+
 ## Execution Order (Step-by-Step)
 
 1. Execute all `P0` stories in Epics E1-E6 and E9.
@@ -232,25 +240,23 @@ Priority: `P0`
 2. High-severity blockers are closed or explicitly deferred with sign-off.
 3. GA launch report is published with known limitations and next-wave commitments.
 
-## Post-Phase-2 Status Snapshot (2026-02-28)
+## Current Status Snapshot (2026-03-08)
 
 | Story | Status | Evidence |
 | --- | --- | --- |
 | E9-S1 | Done | `.github/workflows/forge-ci.yml`, `tests/e2e/profile-lifecycle-local.e2e.test.ts` |
 | E9-S2 | Done | `.github/workflows/forge-ops-smoke.yml` |
 | E9-S3 | Done | `docs/release-checklist.md`, `.github/workflows/forge-release.yml` |
-| E9-S4 | In Progress | `docs/immediate-execution-plans/phase-3/e9-s4-distribution-upgrade-policy-plan.md` |
-| E10-S1 | In Progress | `docs/immediate-execution-plans/phase-3/e10-s1-beta-pilot-execution-plan.md` |
+| E9-S4 | Validated | `docs/distribution-and-upgrade-policy.md`, `scripts/resolve-release-metadata.mjs`, `scripts/validate-release-evidence.mjs`, `.github/workflows/forge-release.yml` |
+| E10-S1 | Ready for Execution | `docs/beta-pilot-plan.md`, `scripts/run-beta-readiness-report.mjs`, `docs/ga-readiness-review-template.md`, `docs/ga-readiness-review-2026-03-08.md` |
 | E10-S2 | In Progress | `docs/immediate-execution-plans/phase-3/e10-s2-s3-triage-and-ga-decision-gate-plan.md` |
 | E10-S3 | In Progress | `docs/immediate-execution-plans/phase-3/e10-s2-s3-triage-and-ga-decision-gate-plan.md` |
 
 ## Immediate Next Sprint (Recommended)
 
-1. Close `E9-S4` with channel policy, release guardrails, and signed distribution manifest outputs.
-2. Execute `E10-S1` beta pilot onboarding and baseline KPI snapshot reporting.
-3. Operationalize trust-gate scripts/runbooks and add trust-gate dry-runs to ops smoke.
-4. Complete `E10-S2/S3` triage and GA decision artifact templates with owner/date accountability.
-5. Start selected `P1` follow-ons (`E2-S4` identity conflict review workflow, `E7-S1` profile overlays, `E8-S1` SLO extensions).
+1. Execute `E10-S1` pilot onboarding and capture the first non-zero KPI window.
+2. Complete `E10-S2/S3` triage and GA decision artifacts with owner/date accountability.
+3. Start selected `P1` follow-ons (`E2-S4` identity conflict review workflow, `E7-S1` profile overlays, `E8-S1` SLO extensions).
 
 Immediate execution plan docs:
 1. `docs/immediate-execution-plans/README.md`
@@ -259,7 +265,7 @@ Immediate execution plan docs:
 
 ## Suggested Tracking Fields
 
-1. `Status`: Not Started, In Progress, Blocked, Done.
+1. `Status`: Not Started, In Progress, Blocked, Implemented, Validated, Ready for Execution, Executed, Approved.
 2. `Target Milestone`: M1, M2, M3.
 3. `Risk`: Low, Medium, High.
 4. `Decision Dependency`: AQ/MQ/DR IDs if governance-bound.

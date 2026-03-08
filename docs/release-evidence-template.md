@@ -4,7 +4,9 @@ Release: `<tag-or-rc-id>`
 Date: `<yyyy-mm-dd>`
 Commit: `<sha>`
 
-STATUS: DRAFT
+STATUS: `<DRAFT|APPROVED>`
+
+Replace the single `STATUS:` line in place. Do not keep both draft and approved markers in the same file.
 
 ## Gate Results
 
@@ -56,5 +58,3 @@ STATUS: DRAFT
 - Security Reviewer: `<name>`
 - QA Owner: `<name>`
 - Platform Owner: `<name>`
-
-STATUS: APPROVED

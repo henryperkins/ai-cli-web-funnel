@@ -16,6 +16,7 @@ This policy defines how Forge release artifacts are distributed, validated, upgr
    - `artifacts/release.sha256.asc`
 2. Workspace packages remain private until a separate package-publication decision is approved.
 3. Channel assignment is enforced at release time via `scripts/verify-distribution-policy.mjs`.
+4. Final release artifacts must be generated from a committed Git revision so the archive, checksum, and evidence all point to the same source state.
 
 ## Release Channels
 
@@ -63,14 +64,24 @@ This policy defines how Forge release artifacts are distributed, validated, upgr
 
 ## Workflow Enforcement
 
-1. `forge-release.yml` validates release evidence and sign-offs.
+1. `forge-release.yml` resolves release metadata before any artifact generation:
+   - `release` events derive `stable` version from the published Git tag,
+   - `workflow_dispatch` requires explicit `release_version` for `candidate` and `canary`,
+   - `workflow_dispatch` for `stable` may fall back to the repo version only if it already satisfies stable policy.
 2. `forge-release.yml` validates channel/version compatibility and emits `artifacts/distribution-manifest.json`.
-3. Release is blocked if policy validation or signature verification fails.
+3. `forge-release.yml` validates release evidence with:
+   - exactly one `STATUS:` line,
+   - `STATUS: APPROVED` during release gating,
+   - completed sign-offs with no placeholder values,
+   - a `Release:` line that matches the resolved version.
+4. Release is blocked if metadata resolution, evidence validation, policy validation, or signature verification fails.
 
 ## Operator Checklist
 
 1. Choose channel (`stable`, `candidate`, `canary`).
 2. Confirm version matches channel policy.
-3. Run required technical gates from `docs/release-checklist.md`.
-4. Verify release evidence references blockers, owners, and dates.
-5. Verify checksums/signatures before distribution.
+3. For manual `candidate` and `canary` runs, provide an explicit prerelease `release_version`.
+4. Run required technical gates from `docs/release-checklist.md`.
+5. Verify release evidence references blockers, owners, and dates and contains a single final `STATUS:` line.
+6. Verify checksums/signatures before distribution.
+7. Ensure the packaging step runs from a clean commit; use `npm run release:prepare -- --mode preflight ...` before attempting the final package step.

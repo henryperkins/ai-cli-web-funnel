@@ -27,7 +27,7 @@ Forge aims to replace that with a deterministic path:
 4. Profile-aware config writes for supported clients.
 5. Health checks, error classification, and rollback guidance.
 
-## Current Repository State (Post Wave 7 + Wave 8/9 Delivery)
+## Current Repository State (Post Wave 10 + Release Hardening)
 
 Validated baseline (Wave 7 build report evidence):
 1. Discover stage: deterministic catalog ingest domain + executable ingest runner (`scripts/run-catalog-ingest.mjs`) with replay-safe persistence over `registry.packages`, `package_aliases`, `package_merge_runs`, `package_field_lineage`, and `package_identity_conflicts`, plus launch-baseline source normalization for `github`, `npm`, and `pypi`.
@@ -78,11 +78,14 @@ Current verified baseline:
 5. `npm run test:e2e-local` passes.
 6. `npm run test:integration-db:docker` passes.
 
+Current release and pilot posture:
+1. `E9-S4` distribution/upgrade policy is validated in workflow, scripts, and docs, but release evidence remains `DRAFT` until final human sign-off and CI signature generation.
+2. `E10-S1` beta pilot tooling is ready for execution; the current GA readiness review is a pre-pilot baseline with zero lifecycle events.
+
 Known open items:
-1. `E9-S4`: finalize distribution channels + upgrade/rollback/deprecation policy execution path.
-2. `E10-S1`: execute closed beta pilot with cohort onboarding and KPI thresholds.
-3. `E10-S2`: run beta triage workflow and close high-severity failure classes.
-4. `E10-S3`: complete GA launch decision package with cross-functional sign-off.
+1. `E10-S1`: execute closed beta pilot with cohort onboarding and collect the first non-zero KPI window.
+2. `E10-S2`: run beta triage workflow and close high-severity failure classes.
+3. `E10-S3`: complete GA launch decision package with cross-functional sign-off.
 
 Important governance boundary:
 1. DR/AQ/MQ statuses remain `Proposed` / `Open` unless explicitly approved.

@@ -18,7 +18,7 @@ on:
         required: true
         default: candidate
       release_version:
-        description: Semantic version for policy validation (optional; defaults to package.json version)
+        description: Semantic version for policy validation (required for candidate/canary manual runs; stable may fall back to package.json version)
         required: false
         default: ""
   release:
@@ -46,26 +46,13 @@ jobs:
 
       - name: Resolve distribution metadata
         id: distribution
-        shell: bash
         run: |
-          set -euo pipefail
-
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            CHANNEL="stable"
-            TAG="${GITHUB_REF_NAME}"
-            VERSION="${TAG#v}"
-          else
-            CHANNEL="${{ github.event.inputs.release_channel || 'candidate' }}"
-            VERSION="${{ github.event.inputs.release_version }}"
-            if [[ -z "$VERSION" ]]; then
-              VERSION="$(node -p "require('./package.json').version")"
-            fi
-            TAG="manual-${GITHUB_SHA}"
-          fi
-
-          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          node scripts/resolve-release-metadata.mjs \
+            --event-name "${{ github.event_name }}" \
+            --release-channel "${{ github.event.inputs.release_channel || 'candidate' }}" \
+            --release-version "${{ github.event.inputs.release_version }}" \
+            --release-tag "${{ github.ref_name }}" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Required gate - check
         run: npm run check
@@ -88,22 +75,11 @@ jobs:
           set -euo pipefail
 
           EVIDENCE_PATH="${{ github.event.inputs.evidence_path || 'docs/release-evidence.md' }}"
-          if [[ ! -f "$EVIDENCE_PATH" ]]; then
-            echo "Missing required release evidence file: $EVIDENCE_PATH"
-            exit 1
-          fi
-
-          grep -q "STATUS: APPROVED" "$EVIDENCE_PATH" || {
-            echo "Release evidence must include STATUS: APPROVED"
-            exit 1
-          }
-
-          for pattern in "Release Manager:" "Security Reviewer:" "QA Owner:" "Platform Owner:"; do
-            grep -q "$pattern" "$EVIDENCE_PATH" || {
-              echo "Release evidence missing required sign-off field: $pattern"
-              exit 1
-            }
-          done
+          node scripts/validate-release-evidence.mjs \
+            --file "$EVIDENCE_PATH" \
+            --expected-version "${{ steps.distribution.outputs.version }}" \
+            --require-approved-status \
+            --require-complete-signoffs
 
       - name: Generate release artifacts and checksums
         id: artifacts
@@ -179,7 +155,7 @@ jobs:
           node scripts/verify-distribution-policy.mjs \
             --channel "${{ steps.distribution.outputs.channel }}" \
             --version "${{ steps.distribution.outputs.version }}" \
-            --release-tag "${{ steps.distribution.outputs.tag }}" \
+            --release-tag "${{ steps.distribution.outputs.release_ref }}" \
             --artifact-name "${{ steps.artifacts.outputs.archive_name }}" \
             --checksum-path artifacts/release.sha256 \
             --signature-path artifacts/release.sha256.asc \

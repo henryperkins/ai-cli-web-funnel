@@ -1,6 +1,6 @@
 {
   "name": "forge-monorepo",
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "private": true,
   "description": "Forge Phase 0/P0.5 monorepo scaffold",
   "workspaces": [
@@ -27,9 +27,12 @@
     "run:security-promotion": "node scripts/run-security-promotion.mjs",
     "run:beta-readiness": "node scripts/run-beta-readiness-report.mjs",
     "run:control-plane": "node apps/control-plane/dist/server-main.js",
+    "release:apply-signoffs": "node scripts/apply-release-signoffs.mjs",
+    "release:prepare": "node scripts/prepare-release-package.mjs",
     "verify:migrations:dr018": "node scripts/verify-dr018-migration.mjs",
     "check:governance": "node scripts/verify-governance-drift.mjs",
-    "check": "npm run check:governance && npm run typecheck && npm run test"
+    "check:docs-status": "node scripts/verify-doc-status-consistency.mjs",
+    "check": "npm run check:governance && npm run check:docs-status && npm run typecheck && npm run test"
   },
   "dependencies": {
     "@prisma/client": "^7.4.2",
