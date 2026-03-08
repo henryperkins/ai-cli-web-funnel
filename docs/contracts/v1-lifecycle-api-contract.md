@@ -36,6 +36,13 @@ Lifecycle operations:
 6. `POST /v1/install/plans/:plan_id/rollback`
 7. `POST /v1/install/plans/:plan_id/verify`
 
+## Server-Side Operational Preconditions
+
+These are operational invariants for the default control-plane composition and do not change request or response payloads:
+1. control-plane startup must provide explicit VS Code adapter target paths via `FORGE_VSCODE_WORKSPACE_ROOT`, `FORGE_VSCODE_USER_PROFILE_PATH`, and `FORGE_VSCODE_DAEMON_DEFAULT_PATH`, or inject an adapter explicitly in process.
+2. the default adapter only mutates Forge-managed scope files; existing foreign files are reported as non-daemon-owned and remain unchanged.
+3. zero-byte or whitespace-only target scope files are treated as recoverable and are rewritten with the canonical Forge payload on the next successful adapter write.
+
 ## Idempotency Contract
 
 Scope keys:

@@ -42,6 +42,7 @@ Startup fails closed when:
 ## Startup and triage commands
 1. Start control-plane with required retrieval bootstrap:
    - `FORGE_REQUIRE_RETRIEVAL_BOOTSTRAP=true npm run run:control-plane`
+   - default env-backed startup also requires `FORGE_DATABASE_URL` (or `DATABASE_URL`) plus `FORGE_VSCODE_WORKSPACE_ROOT`, `FORGE_VSCODE_USER_PROFILE_PATH`, and `FORGE_VSCODE_DAEMON_DEFAULT_PATH`
 2. Validate readiness:
    - `curl -sS http://127.0.0.1:8787/ready | jq .`
 3. Preview retrieval sync without writes:

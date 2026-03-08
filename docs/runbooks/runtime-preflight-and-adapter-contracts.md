@@ -1,7 +1,7 @@
 # Runtime Preflight and Adapter Contracts Runbook
 
 ## Scope
-Operational guide for runtime start-order enforcement with env-driven feature flags, remote connector auth/secret resolution, OAuth token exchange, and scope-sidecar ownership protection.
+Operational guide for runtime start-order enforcement with env-driven feature flags, remote connector auth/secret resolution, OAuth token exchange, scope-sidecar ownership protection, and explicit control-plane VS Code adapter target configuration.
 
 ## v1 Adapter Scope Lock
 1. GA adapter scope is explicitly locked to `vscode_copilot` + `local` + `stdio`.
@@ -31,23 +31,35 @@ Operational guide for runtime start-order enforcement with env-driven feature fl
 1. `policy_preflight_blocked` / `trust_gate_blocked`
 2. `scope_not_found`
 3. `adapter_write_failed` / `adapter_remove_failed` / `adapter_<adapter_specific>`
-4. `preflight_checks_failed`
-5. `start_or_connect_failed`
-6. `remote_sse_hook_missing`
-7. `remote_streamable_http_hook_missing`
-8. `remote_sse_probe_failed`
-9. `remote_streamable_http_probe_failed`
-10. `health_validate_failed`
-11. `supervise_failed`
+4. `no_writable_scope_available`
+5. `preflight_checks_failed`
+6. `start_or_connect_failed`
+7. `remote_sse_hook_missing`
+8. `remote_streamable_http_hook_missing`
+9. `remote_sse_probe_failed`
+10. `remote_streamable_http_probe_failed`
+11. `health_validate_failed`
+12. `supervise_failed`
 
 ## Feature-flag env controls
 1. `FORGE_RUNTIME_LOCAL_SUPERVISOR_ENABLED`
 2. `FORGE_RUNTIME_REMOTE_SSE_ENABLED`
 3. `FORGE_RUNTIME_REMOTE_STREAMABLE_HTTP_ENABLED`
 4. `FORGE_RUNTIME_SCOPE_SIDECAR_OWNERSHIP_ENABLED`
-5. `FORGE_RUNTIME_HARDCODED_VSCODE_PROFILE_PATH`
 
 Accepted boolean values: `1,true,yes,on,0,false,no,off`.
+
+## Control-plane VS Code adapter target env controls
+1. `FORGE_VSCODE_WORKSPACE_ROOT`
+2. `FORGE_VSCODE_USER_PROFILE_PATH`
+3. `FORGE_VSCODE_DAEMON_DEFAULT_PATH`
+
+Operational invariants:
+1. all three values are required for default control-plane startup.
+2. each value must be an absolute path.
+3. these env vars are not feature flags and are not replaced by `FORGE_RUNTIME_DAEMON_URL`.
+4. adapter writes are blocked when an existing scope file is not Forge-managed (`managed_by=forge` plus sidecar ownership marker).
+5. empty or whitespace-only target files are treated as recoverable and rewritten on the next successful adapter write.
 
 ## Remote auth env controls
 1. `FORGE_RUNTIME_REMOTE_SSE_URL`
@@ -75,9 +87,15 @@ Secret resolution order:
    - Cause: corresponding feature flag disabled or remote wiring absent.
    - Fix: enable required runtime flag and ensure remote resolver/probe dependencies are configured.
 5. `control_plane_env_invalid:*`
-   - Cause: invalid startup env matrix (for example retrieval bootstrap enabled without required retrieval env).
+   - Cause: invalid startup env matrix (for example retrieval bootstrap enabled without required retrieval env, or missing/non-absolute VS Code adapter target paths for default env-backed startup).
    - Fix: correct env values according to `.env.example`, then restart control-plane.
-6. oauth failure log contains `[REDACTED]` markers
+6. `scope_not_daemon_owned`
+   - Cause: target scope file already exists but is not Forge-managed.
+   - Fix: point the adapter at a Forge-owned scope file, or migrate the target file under explicit operator control before retrying.
+7. `no_writable_scope_available`
+   - Cause: every discovered scope is blocked because it is unapproved, not writable, or not daemon-owned.
+   - Fix: supply at least one approved, writable, daemon-owned scope target before retrying verify/apply.
+8. oauth failure log contains `[REDACTED]` markers
    - Cause: secret-like fragments were detected and sanitized.
    - Fix: use correlation IDs + reason codes for triage; do not attempt to log plaintext secret payloads.
 

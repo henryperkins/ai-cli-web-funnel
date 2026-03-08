@@ -62,6 +62,12 @@ export type InstallPlanExplainability = SharedInstallPlanExplainability;
 export type InstallLifecyclePolicyDecision = SharedInstallLifecyclePolicyDecision;
 export type InstallLifecycleReasonCode = SharedInstallLifecycleReasonCode;
 
+export interface ControlPlaneCopilotAdapterPaths {
+  workspaceRoot: string;
+  userProfilePath: string;
+  daemonDefaultPath: string;
+}
+
 export type InstallLifecycleOutboxEventType =
   | 'install.plan.created'
   | 'install.apply.succeeded'
@@ -520,7 +526,9 @@ function requiredActionsFromConflicts(conflicts: InstallPlanConflict[]): string[
         actions.add('Review org policy/security enforcement and resolve blocking reason codes before apply.');
         break;
       case 'runtime_incompatible':
-        actions.add('Ensure at least one approved writable runtime scope is available for the target client.');
+        actions.add(
+          'Ensure at least one approved, writable, daemon-owned runtime scope is available for the target client.'
+        );
         break;
       case 'capability_incompatible':
         actions.add('Adjust requested permissions to satisfy policy caps and disallowed-permission rules.');
@@ -1235,7 +1243,12 @@ export function createInstallLifecycleService(
           scope: scope.scope,
           scope_path: scope.scope_path,
           status: 'pending',
-          reason_code: scope.approved ? 'scope_not_writable' : 'scope_not_approved',
+          reason_code:
+            !scope.approved
+              ? 'scope_not_approved'
+              : !scope.writable
+                ? 'scope_not_writable'
+                : 'scope_not_daemon_owned',
           payload: {
             daemon_owned: scope.daemon_owned,
             approved: scope.approved,
@@ -1339,7 +1352,7 @@ export function createInstallLifecycleService(
           reason_code: 'no_writable_scope_available',
           package_ids: [request.package_id],
           severity: 'error',
-          message: 'No approved writable scope is available for target runtime.'
+          message: 'No approved, writable, daemon-owned scope is available for target runtime.'
         });
       }
 
@@ -2916,7 +2929,9 @@ export function createInstallLifecycleService(
   };
 }
 
-export function createDefaultCopilotAdapterForLifecycle(): CopilotAdapterContract {
+export function createDefaultCopilotAdapterForLifecycle(
+  paths: ControlPlaneCopilotAdapterPaths
+): CopilotAdapterContract {
   return createCopilotVscodeAdapterContract(
     {
       async preflight(input) {
@@ -2939,6 +2954,8 @@ export function createDefaultCopilotAdapterForLifecycle(): CopilotAdapterContrac
           details: []
         };
       }
-    }
+    },
+    {},
+    paths
   );
 }

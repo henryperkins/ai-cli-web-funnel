@@ -11,8 +11,6 @@ import process from 'node:process';
 
 const GOVERNANCE_FILES = [
   'application_decision_records.md',
-  'application_master_open_questions.md',
-  'master_open_questions.md',
   'OPEN_QUESTIONS_TRACKER.md'
 ];
 

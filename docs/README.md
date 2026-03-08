@@ -46,11 +46,10 @@ Primary framing lives in the root `README.md`.
    - `docs/contracts/v1-lifecycle-api-contract.md`
 3. v1 compatibility matrix: `docs/compatibility-matrix.md`
 4. Application decision records: `application_decision_records.md`
-5. Open questions: `application_master_open_questions.md`, `master_open_questions.md`
-6. Guardrail tracker: `OPEN_QUESTIONS_TRACKER.md`
-7. Implementation-time decision log: `DECISION_LOG.md`
-8. CI verification contract: `docs/ci-verification.md`
-9. E6 governance closure artifact: `docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`
+5. Guardrail tracker: `OPEN_QUESTIONS_TRACKER.md`
+6. Implementation-time decision log: `DECISION_LOG.md`
+7. CI verification contract: `docs/ci-verification.md`
+8. E6 governance closure artifact: `docs/open-questions-resolution/e6-governance-closure-2026-02-28.md`
 
 ## Runbooks
 

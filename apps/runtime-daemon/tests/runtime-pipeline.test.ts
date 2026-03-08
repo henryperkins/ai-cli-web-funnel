@@ -77,6 +77,13 @@ describe('runtime daemon contracts', () => {
         writable: true,
         approved: true,
         daemon_owned: true
+      },
+      {
+        scope: 'user_profile',
+        scope_path: '/foreign',
+        writable: true,
+        approved: true,
+        daemon_owned: false
       }
     ]);
 
@@ -85,6 +92,13 @@ describe('runtime daemon contracts', () => {
       'user_profile',
       'daemon_default'
     ]);
+    expect(resolution.blocked_scopes).toContainEqual({
+      scope: 'user_profile',
+      scope_path: '/foreign',
+      writable: true,
+      approved: true,
+      daemon_owned: false
+    });
   });
 
   it('short-circuits pipeline when policy preflight blocks', async () => {
@@ -262,6 +276,71 @@ describe('runtime daemon contracts', () => {
     expect(result.stages[result.stages.length - 1]).toMatchObject({
       stage: 'remote_connect',
       ok: false
+    });
+  });
+
+  it('fails verify preflight when no daemon-owned writable scopes remain', async () => {
+    const request = {
+      ...buildRequest(),
+      trust_state: 'trusted' as const,
+      scope_candidates: [
+        {
+          scope: 'workspace' as const,
+          scope_path: '/foreign-workspace',
+          writable: true,
+          approved: true,
+          daemon_owned: false
+        },
+        {
+          scope: 'daemon_default' as const,
+          scope_path: '/read-only-daemon',
+          writable: false,
+          approved: true,
+          daemon_owned: true
+        }
+      ]
+    };
+
+    const pipeline = createRuntimeStartPipeline(
+      {
+        async preflight() {
+          return {
+            outcome: 'allowed',
+            install_allowed: true,
+            runtime_allowed: true,
+            reason_code: null,
+            warnings: [],
+            policy_blocked: false,
+            blocked_by: 'none'
+          };
+        }
+      },
+      {
+        async preflight_checks() {
+          throw new Error('preflight hooks should not execute without a writable scope');
+        },
+        async start_or_connect() {
+          throw new Error('start hooks should not execute without a writable scope');
+        },
+        async health_validate() {
+          throw new Error('health hooks should not execute without a writable scope');
+        },
+        async supervise() {
+          throw new Error('supervise hooks should not execute without a writable scope');
+        }
+      }
+    );
+
+    const result = await pipeline.run(request);
+
+    expect(result.ready).toBe(false);
+    expect(result.failure_reason_code).toBe('no_writable_scope_available');
+    expect(result.scope_resolution.ordered_writable_scopes).toEqual([]);
+    expect(result.scope_resolution.blocked_scopes).toHaveLength(2);
+    expect(result.stages[result.stages.length - 1]).toMatchObject({
+      stage: 'preflight_checks',
+      ok: false,
+      details: ['workspace:scope_not_daemon_owned', 'daemon_default:scope_not_writable']
     });
   });
 });

@@ -43,9 +43,7 @@ Purpose: execution tracker for unresolved AQ/MQ items with explicit safe default
 
 ## Full Register Coverage (No Silent Gaps)
 
-Canonical source registers:
-1. `application_master_open_questions.md` (AQ-001..AQ-060)
-2. `master_open_questions.md` (MQ-001..MQ-038)
+Canonical source registers: `application_decision_records.md` (DR-001..DR-019), `DECISION_LOG.md`
 
 Coverage policy by register section:
 

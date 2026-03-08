@@ -75,6 +75,7 @@ export interface RuntimePipelineResult {
   failure_reason_code:
     | 'policy_preflight_blocked'
     | 'trust_gate_blocked'
+    | 'no_writable_scope_available'
     | 'preflight_checks_failed'
     | 'start_or_connect_failed'
     | 'remote_sse_hook_missing'
@@ -103,6 +104,28 @@ export interface RuntimePipelineResult {
 
 const SCOPE_ORDER: RuntimeScope[] = ['workspace', 'user_profile', 'daemon_default'];
 
+function resolveBlockedScopeReason(candidate: RuntimeScopeCandidate): string {
+  if (!candidate.approved) {
+    return 'scope_not_approved';
+  }
+
+  if (!candidate.writable) {
+    return 'scope_not_writable';
+  }
+
+  return 'scope_not_daemon_owned';
+}
+
+function describeMissingWritableScope(resolution: RuntimeScopeResolution): string[] {
+  if (resolution.blocked_scopes.length === 0) {
+    return ['no_scope_candidates_available'];
+  }
+
+  return resolution.blocked_scopes.map(
+    (candidate) => `${candidate.scope}:${resolveBlockedScopeReason(candidate)}`
+  );
+}
+
 export function resolveRuntimeScopeWriteOrder(
   candidates: RuntimeScopeCandidate[]
 ): RuntimeScopeResolution {
@@ -110,8 +133,12 @@ export function resolveRuntimeScopeWriteOrder(
     (left, right) => SCOPE_ORDER.indexOf(left.scope) - SCOPE_ORDER.indexOf(right.scope)
   );
 
-  const ordered_writable_scopes = ordered.filter((candidate) => candidate.writable && candidate.approved);
-  const blocked_scopes = ordered.filter((candidate) => !candidate.writable || !candidate.approved);
+  const ordered_writable_scopes = ordered.filter(
+    (candidate) => candidate.writable && candidate.approved && candidate.daemon_owned
+  );
+  const blocked_scopes = ordered.filter(
+    (candidate) => !candidate.writable || !candidate.approved || !candidate.daemon_owned
+  );
 
   return {
     ordered_writable_scopes,
@@ -182,6 +209,23 @@ export function createRuntimeStartPipeline(
             policy.outcome === 'policy_blocked'
               ? 'policy_preflight_blocked'
               : 'trust_gate_blocked',
+          final_trust_state: trustState,
+          policy,
+          scope_resolution: scopeResolution,
+          stages
+        };
+      }
+
+      if (scopeResolution.ordered_writable_scopes.length === 0) {
+        stages.push({
+          stage: 'preflight_checks',
+          ok: false,
+          details: describeMissingWritableScope(scopeResolution)
+        });
+
+        return {
+          ready: false,
+          failure_reason_code: 'no_writable_scope_available',
           final_trust_state: trustState,
           policy,
           scope_resolution: scopeResolution,

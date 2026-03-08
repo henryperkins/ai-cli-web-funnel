@@ -44,6 +44,7 @@ import {
   createInstallLifecycleService,
   createPostgresInstallOutboxPublisher,
   createPostgresLifecycleIdempotencyAdapter,
+  type ControlPlaneCopilotAdapterPaths,
   type InstallLifecycleLogger,
   type InstallRuntimeVerifier,
   type PostgresTransactionalQueryExecutor
@@ -174,6 +175,7 @@ export interface ForgeHttpAppPostgresDependencies {
     };
   };
   copilotAdapter?: CopilotAdapterContract;
+  copilotAdapterPaths?: ControlPlaneCopilotAdapterPaths;
   runtimeVerifier?: InstallRuntimeVerifier;
   installLogger?: InstallLifecycleLogger;
   daemonUrl?: string;
@@ -1144,6 +1146,17 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
 export function createForgeHttpAppFromPostgres(
   dependencies: ForgeHttpAppPostgresDependencies
 ) {
+  const copilotAdapter =
+    dependencies.copilotAdapter ??
+    (dependencies.copilotAdapterPaths
+      ? createDefaultCopilotAdapterForLifecycle(dependencies.copilotAdapterPaths)
+      : null);
+  if (!copilotAdapter) {
+    throw new Error(
+      'control_plane_vscode_adapter_config_missing: inject copilotAdapter or provide copilotAdapterPaths'
+    );
+  }
+
   const eventIngestion: IngestionDependencies = {
     idempotency: createPostgresIdempotencyAdapter({ db: dependencies.db }),
     persistence: createPostgresIngestionPersistenceAdapter({ db: dependencies.db }),
@@ -1338,7 +1351,7 @@ export function createForgeHttpAppFromPostgres(
 
   const installLifecycle = createInstallLifecycleService({
     db: dependencies.db,
-    copilotAdapter: dependencies.copilotAdapter ?? createDefaultCopilotAdapterForLifecycle(),
+    copilotAdapter,
     runtimeVerifier,
     idempotency: createPostgresLifecycleIdempotencyAdapter({ db: dependencies.db }),
     outboxPublisher: createPostgresInstallOutboxPublisher({ db: dependencies.db }),

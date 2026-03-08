@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { CopilotAdapterContract } from '@forge/copilot-vscode-adapter';
 import { requestJson, startForgeControlPlaneServer } from '../src/server.js';
 
 class FakeDb {
@@ -18,13 +19,68 @@ class FakeDb {
   }
 }
 
+function createStubCopilotAdapter(): CopilotAdapterContract {
+  return {
+    async discover_scopes() {
+      return [
+        {
+          scope: 'workspace',
+          scope_path: '/tmp/forge-workspace/.vscode/mcp.json',
+          writable: true,
+          approved: true,
+          daemon_owned: true
+        }
+      ];
+    },
+    async read_entry() {
+      return null;
+    },
+    async write_entry() {
+      return;
+    },
+    async remove_entry() {
+      return;
+    },
+    async policy_preflight() {
+      return {
+        outcome: 'allowed',
+        install_allowed: true,
+        runtime_allowed: true,
+        reason_code: null,
+        warnings: [],
+        policy_blocked: false,
+        blocked_by: 'none'
+      };
+    },
+    lifecycle_hooks: {
+      async on_before_write() {
+        return;
+      },
+      async on_after_write() {
+        return;
+      },
+      async on_lifecycle() {
+        return;
+      },
+      async on_health_check() {
+        return {
+          healthy: true,
+          details: []
+        };
+      }
+    },
+    remote_hooks: {}
+  };
+}
+
 describe('control-plane server bootstrap', () => {
   it('starts server, serves health/readiness, and shuts down cleanly', async () => {
     try {
       const server = await startForgeControlPlaneServer({
         db: new FakeDb(),
         host: '127.0.0.1',
-        port: 0
+        port: 0,
+        copilotAdapter: createStubCopilotAdapter()
       });
 
       const health = await requestJson(server.host, server.port, '/healthz', 'GET');
@@ -48,6 +104,7 @@ describe('control-plane server bootstrap', () => {
         db: new FakeDb(),
         host: '127.0.0.1',
         port: 0,
+        copilotAdapter: createStubCopilotAdapter(),
         readinessState: {
           ok: false,
           details: ['db_connectivity_failed:timeout']

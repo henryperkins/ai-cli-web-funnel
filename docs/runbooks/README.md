@@ -24,7 +24,7 @@ Integration-db validation helpers:
 
 Lifecycle/runtime validation helpers:
 - `npm run test:e2e-local` (filesystem-backed local lifecycle flow coverage).
-- `npm run run:control-plane` (starts the real control-plane server from env).
+- `npm run run:control-plane` (starts the real control-plane server from env; default env-backed startup requires DB env plus the three `FORGE_VSCODE_*` adapter target vars).
 - `npm run run:catalog-reconciliation -- --mode dry-run --source docs --input <docs-source-json>` (catalog docs-source reconciliation with bounded retries).
 - `npm run run:slo-rollup -- --mode dry-run --from <iso> --to <iso> --limit 100` (requires DB URL).
 - `npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from <iso> --window-to <iso> --trigger runbook-check` (requires DB URL).

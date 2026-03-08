@@ -1,7 +1,7 @@
 # Install Lifecycle (VS Code Copilot Local) Runbook
 
 ## Scope
-Operational guide for discover -> plan -> apply/update/remove/rollback -> verify in `vscode_copilot` + `local` mode, including replay-safe idempotency, outbox continuity, and remove/rollback recovery hardening.
+Operational guide for discover -> plan -> apply/update/remove/rollback -> verify in `vscode_copilot` + `local` mode, including replay-safe idempotency, outbox continuity, remove/rollback recovery hardening, and explicit VS Code adapter target ownership rules.
 
 ## Components
 1. Catalog ingest + persistence:
@@ -66,10 +66,15 @@ Invariant:
 ## Preflight
 1. Apply migrations `001..016` (lifecycle state extension is in `014`, trust-gate rollout migration is in `016`).
 2. Set DB env: `FORGE_DATABASE_URL` (or `DATABASE_URL`).
-3. If retrieval is required, set:
+3. Set explicit adapter target envs with absolute paths:
+   - `FORGE_VSCODE_WORKSPACE_ROOT`
+   - `FORGE_VSCODE_USER_PROFILE_PATH`
+   - `FORGE_VSCODE_DAEMON_DEFAULT_PATH`
+4. Ensure any pre-existing non-empty target scope files are Forge-managed before apply/update/remove. Empty or whitespace-only target files are recovered on the next successful write. Foreign or user-managed files will surface `scope_not_daemon_owned` and are not rewritten in place.
+5. If retrieval is required, set:
    - `FORGE_REQUIRE_RETRIEVAL_BOOTSTRAP=true`
    - retrieval env vars from semantic runbook.
-4. Keep governance statuses unchanged (Open/Proposed remain unchanged unless separately approved).
+6. Keep governance statuses unchanged (Open/Proposed remain unchanged unless separately approved).
 
 ## Operator commands
 1. Catalog ingest dry-run:
@@ -82,6 +87,7 @@ Invariant:
    - `npm run run:catalog-ingest -- --mode apply --input <path-to-json>`
 3. Start control-plane:
    - `npm run run:control-plane`
+   - default env-backed startup requires the DB env from step 2 plus the three `FORGE_VSCODE_*` adapter target vars from step 3
 4. Outbox dry-run:
    - `npm run run:outbox -- --mode dry-run --limit 25`
 5. Outbox production with internal handlers:
@@ -113,6 +119,7 @@ Invariant:
 15. `trust_gate_blocked`
 16. `adapter_remove_failed`
 17. `rollback_cleanup_ok` / `rollback_restore_ok`
+18. `no_writable_scope_available`
 
 ## Operator procedures: remove and rollback
 1. Remove happy path:

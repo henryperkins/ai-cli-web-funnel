@@ -1,7 +1,19 @@
+import { isAbsolute } from 'node:path';
+
 export interface ControlPlaneStartupEnvValidationResult {
   ok: boolean;
   errors: string[];
 }
+
+export interface ControlPlaneStartupEnvValidationOptions {
+  requireVscodeAdapterPaths?: boolean;
+}
+
+const VSCODE_ADAPTER_PATH_ENV_KEYS = [
+  'FORGE_VSCODE_WORKSPACE_ROOT',
+  'FORGE_VSCODE_USER_PROFILE_PATH',
+  'FORGE_VSCODE_DAEMON_DEFAULT_PATH'
+] as const;
 
 function parseBoolean(value: string | undefined): boolean | null {
   if (value === undefined) {
@@ -23,9 +35,11 @@ function hasValue(value: string | undefined): boolean {
 }
 
 export function validateControlPlaneStartupEnv(
-  env: Readonly<Record<string, string | undefined>>
+  env: Readonly<Record<string, string | undefined>>,
+  options: ControlPlaneStartupEnvValidationOptions = {}
 ): ControlPlaneStartupEnvValidationResult {
   const errors: string[] = [];
+  const requireVscodeAdapterPaths = options.requireVscodeAdapterPaths ?? true;
 
   const requireRetrievalBootstrap = parseBoolean(env.FORGE_REQUIRE_RETRIEVAL_BOOTSTRAP);
   if (requireRetrievalBootstrap === null && env.FORGE_REQUIRE_RETRIEVAL_BOOTSTRAP !== undefined) {
@@ -91,6 +105,20 @@ export function validateControlPlaneStartupEnv(
       errors.push(
         'FORGE_RUNTIME_REMOTE_SECRET_REF is required when FORGE_RUNTIME_REMOTE_AUTH_TYPE is set'
       );
+    }
+  }
+
+  if (requireVscodeAdapterPaths) {
+    for (const key of VSCODE_ADAPTER_PATH_ENV_KEYS) {
+      const value = env[key];
+      if (!hasValue(value)) {
+        errors.push(`${key} is required for control-plane VS Code adapter targets`);
+        continue;
+      }
+
+      if (!isAbsolute(value!.trim())) {
+        errors.push(`${key} must be an absolute path`);
+      }
     }
   }
 

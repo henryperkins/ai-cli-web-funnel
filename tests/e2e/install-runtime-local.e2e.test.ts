@@ -238,7 +238,15 @@ describe('e2e local: adapter + runtime composition', () => {
           transport: 'stdio',
           trust_state: 'trusted',
           trust_reset_trigger: 'none',
-          scope_candidates: [],
+          scope_candidates: [
+            {
+              scope: 'workspace',
+              scope_path: '/tmp/forge-e2e-http/.vscode/mcp.json',
+              writable: true,
+              approved: true,
+              daemon_owned: true
+            }
+          ],
           policy_input: {
             org_id: 'org-e2e',
             package_id: 'pkg-e2e-http',

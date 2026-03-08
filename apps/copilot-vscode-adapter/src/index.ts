@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import {
   access,
@@ -106,6 +105,20 @@ interface CopilotScopeFile {
   servers: CopilotServerEntry[];
 }
 
+interface ResolvedScopePath {
+  scope: AdapterScope;
+  scope_path: string;
+}
+
+interface CopilotScopeFileState {
+  state: 'missing' | 'recoverable_empty' | 'forge_managed' | 'foreign';
+  exists: boolean;
+  daemon_owned: boolean;
+  updated_at: string;
+  ownership_updated_at: string;
+  servers: CopilotServerEntry[];
+}
+
 const SCOPE_ORDER: AdapterScope[] = ['workspace', 'user_profile', 'daemon_default'];
 
 export function orderCopilotScopeWrites(
@@ -119,8 +132,12 @@ export function orderCopilotScopeWrites(
   );
 
   return {
-    ordered_writable: ordered.filter((scope) => scope.writable && scope.approved),
-    blocked: ordered.filter((scope) => !scope.writable || !scope.approved)
+    ordered_writable: ordered.filter(
+      (scope) => scope.writable && scope.approved && scope.daemon_owned
+    ),
+    blocked: ordered.filter(
+      (scope) => !scope.writable || !scope.approved || !scope.daemon_owned
+    )
   };
 }
 
@@ -143,38 +160,43 @@ export function resolveAdapterTrustTransition(
   return current;
 }
 
-function defaultScopePaths(options: CopilotAdapterFilesystemOptions): Record<AdapterScope, string> {
-  const workspaceRoot = options.workspaceRoot ?? process.cwd();
-  const defaultBase = resolve(homedir(), '.forge');
+function resolveScopePaths(options: CopilotAdapterFilesystemOptions): ResolvedScopePath[] {
+  const resolved: ResolvedScopePath[] = [];
 
-  return {
-    workspace: resolve(workspaceRoot, '.vscode/mcp.json'),
-    user_profile:
-      options.userProfilePath ?? resolve(defaultBase, 'copilot', 'mcp-user-profile.json'),
-    daemon_default:
-      options.daemonDefaultPath ?? resolve(defaultBase, 'runtime', 'default-scope.json')
-  };
+  if (options.workspaceRoot) {
+    resolved.push({
+      scope: 'workspace',
+      scope_path: resolve(options.workspaceRoot, '.vscode/mcp.json')
+    });
+  }
+
+  if (options.userProfilePath) {
+    resolved.push({
+      scope: 'user_profile',
+      scope_path: resolve(options.userProfilePath)
+    });
+  }
+
+  if (options.daemonDefaultPath) {
+    resolved.push({
+      scope: 'daemon_default',
+      scope_path: resolve(options.daemonDefaultPath)
+    });
+  }
+
+  return resolved;
 }
 
-function ensureDaemonOwned(scope: CopilotScopeDescriptor): void {
-  if (!scope.daemon_owned) {
+function assertMutableScopeOwnership(
+  scope: CopilotScopeDescriptor,
+  state?: CopilotScopeFileState
+): void {
+  if (!scope.daemon_owned || state?.daemon_owned === false) {
     throw new CopilotFilesystemAdapterError(
       'scope_not_daemon_owned',
       `Scope ${scope.scope} is not daemon-owned and cannot be mutated.`
     );
   }
-}
-
-function createEmptyScopeFile(nowIso: string): CopilotScopeFile {
-  return {
-    schema_version: '1',
-    managed_by: 'forge',
-    updated_at: nowIso,
-    sidecar: {
-      ownership_updated_at: nowIso
-    },
-    servers: []
-  };
 }
 
 async function fileExists(fsOps: Required<CopilotAdapterFilesystemOptions>['fs'], path: string): Promise<boolean> {
@@ -186,19 +208,49 @@ async function fileExists(fsOps: Required<CopilotAdapterFilesystemOptions>['fs']
   }
 }
 
+function isForgeManagedScopeRecord(record: Record<string, unknown>): boolean {
+  if (record.managed_by !== 'forge' || record.schema_version !== '1') {
+    return false;
+  }
+
+  if (typeof record.sidecar !== 'object' || record.sidecar === null) {
+    return false;
+  }
+
+  const sidecar = record.sidecar as Record<string, unknown>;
+  return (
+    typeof sidecar.ownership_updated_at === 'string' &&
+    sidecar.ownership_updated_at.trim().length > 0
+  );
+}
+
 async function readScopeFile(
   fsOps: Required<CopilotAdapterFilesystemOptions>['fs'],
   scopePath: string,
   nowIso: string
-): Promise<CopilotScopeFile> {
+): Promise<CopilotScopeFileState> {
   const exists = await fileExists(fsOps, scopePath);
   if (!exists) {
-    return createEmptyScopeFile(nowIso);
+    return {
+      state: 'missing',
+      exists: false,
+      daemon_owned: true,
+      updated_at: nowIso,
+      ownership_updated_at: nowIso,
+      servers: []
+    };
   }
 
   const content = await fsOps.readFile(scopePath, 'utf8');
   if (content.trim().length === 0) {
-    return createEmptyScopeFile(nowIso);
+    return {
+      state: 'recoverable_empty',
+      exists: true,
+      daemon_owned: true,
+      updated_at: nowIso,
+      ownership_updated_at: nowIso,
+      servers: []
+    };
   }
 
   let parsed: unknown;
@@ -220,6 +272,7 @@ async function readScopeFile(
   }
 
   const record = parsed as Record<string, unknown>;
+  const daemonOwned = isForgeManagedScopeRecord(record);
   const servers = Array.isArray(record.servers)
     ? record.servers.filter(
         (entry) =>
@@ -231,20 +284,20 @@ async function readScopeFile(
     : [];
 
   return {
-    schema_version: '1',
-    managed_by: 'forge',
+    state: daemonOwned ? 'forge_managed' : 'foreign',
+    exists: true,
+    daemon_owned: daemonOwned,
     updated_at:
       typeof record.updated_at === 'string' && record.updated_at.trim().length > 0
         ? record.updated_at
         : nowIso,
-    sidecar: {
-      ownership_updated_at:
-        typeof record.sidecar === 'object' &&
-        record.sidecar !== null &&
-        typeof (record.sidecar as Record<string, unknown>).ownership_updated_at === 'string'
-          ? String((record.sidecar as Record<string, unknown>).ownership_updated_at)
-          : nowIso
-    },
+    ownership_updated_at:
+      daemonOwned &&
+      typeof record.sidecar === 'object' &&
+      record.sidecar !== null &&
+      typeof (record.sidecar as Record<string, unknown>).ownership_updated_at === 'string'
+        ? String((record.sidecar as Record<string, unknown>).ownership_updated_at)
+        : nowIso,
     servers: servers as CopilotServerEntry[]
   };
 }
@@ -256,7 +309,7 @@ async function writeFileAtomically(
 ): Promise<void> {
   const directory = dirname(scopePath);
   const tempPath = `${scopePath}.tmp-${randomUUID()}`;
-  const backupPath = `${scopePath}.bak`;
+  const backupPath = `${scopePath}.bak-${randomUUID()}`;
 
   await fsOps.mkdir(directory, { recursive: true });
 
@@ -317,6 +370,18 @@ function toJson(payload: CopilotScopeFile): string {
   return JSON.stringify(payload, null, 2) + '\n';
 }
 
+function createScopeFilePayload(nowIso: string, servers: CopilotServerEntry[]): CopilotScopeFile {
+  return {
+    schema_version: '1',
+    managed_by: 'forge',
+    updated_at: nowIso,
+    sidecar: {
+      ownership_updated_at: nowIso
+    },
+    servers
+  };
+}
+
 export function createCopilotVscodeAdapterContract(
   policyClient: CopilotPolicyPreflightClient,
   lifecycleHooks: CopilotLifecycleHooks,
@@ -324,6 +389,7 @@ export function createCopilotVscodeAdapterContract(
   options: CopilotAdapterFilesystemOptions = {}
 ): CopilotAdapterContract {
   const now = options.now ?? (() => new Date());
+  const scopeLocks = new Map<string, Promise<void>>();
   const fsOps = {
     async access(path: string): Promise<void> {
       if (options.fs?.access) {
@@ -374,33 +440,64 @@ export function createCopilotVscodeAdapterContract(
     }
   } satisfies Required<CopilotAdapterFilesystemOptions>['fs'];
 
-  const paths = defaultScopePaths(options);
+  const scopePaths = resolveScopePaths(options);
+
+  async function withScopeLock<T>(scopePath: string, operation: () => Promise<T>): Promise<T> {
+    const previous = scopeLocks.get(scopePath) ?? Promise.resolve();
+    let release: (() => void) | undefined;
+    const current = new Promise<void>((resolveLock) => {
+      release = resolveLock;
+    });
+    const next = previous.catch(() => undefined).then(() => current);
+    scopeLocks.set(scopePath, next);
+
+    await previous.catch(() => undefined);
+
+    try {
+      return await operation();
+    } finally {
+      release?.();
+      if (scopeLocks.get(scopePath) === next) {
+        scopeLocks.delete(scopePath);
+      }
+    }
+  }
 
   return {
     async discover_scopes() {
-      return [
-        {
-          scope: 'workspace',
-          scope_path: paths.workspace,
-          writable: true,
-          approved: true,
-          daemon_owned: true
-        },
-        {
-          scope: 'user_profile',
-          scope_path: paths.user_profile,
-          writable: true,
-          approved: true,
-          daemon_owned: true
-        },
-        {
-          scope: 'daemon_default',
-          scope_path: paths.daemon_default,
-          writable: true,
-          approved: true,
-          daemon_owned: true
+      const nowIso = now().toISOString();
+      const discovered: CopilotScopeDescriptor[] = [];
+
+      for (const scopePath of scopePaths) {
+        try {
+          const state = await readScopeFile(fsOps, scopePath.scope_path, nowIso);
+          discovered.push({
+            scope: scopePath.scope,
+            scope_path: scopePath.scope_path,
+            writable: true,
+            approved: true,
+            daemon_owned: state.daemon_owned
+          });
+        } catch (error) {
+          if (
+            error instanceof CopilotFilesystemAdapterError &&
+            error.code === 'scope_read_invalid_json'
+          ) {
+            discovered.push({
+              scope: scopePath.scope,
+              scope_path: scopePath.scope_path,
+              writable: true,
+              approved: true,
+              daemon_owned: false
+            });
+            continue;
+          }
+
+          throw error;
         }
-      ];
+      }
+
+      return discovered;
     },
 
     async read_entry(scope, packageId) {
@@ -412,50 +509,53 @@ export function createCopilotVscodeAdapterContract(
     },
 
     async write_entry(scope, entry) {
-      ensureDaemonOwned(scope);
+      assertMutableScopeOwnership(scope);
       await lifecycleHooks.on_before_write(entry, scope);
 
-      const nowIso = now().toISOString();
-      const record = await readScopeFile(fsOps, scope.scope_path, nowIso);
+      await withScopeLock(scope.scope_path, async () => {
+        const nowIso = now().toISOString();
+        const record = await readScopeFile(fsOps, scope.scope_path, nowIso);
+        assertMutableScopeOwnership(scope, record);
 
-      const existingWithoutTarget = record.servers.filter(
-        (candidate) => candidate.package_id !== entry.package_id
-      );
+        const existingWithoutTarget = record.servers.filter(
+          (candidate) => candidate.package_id !== entry.package_id
+        );
 
-      const next: CopilotScopeFile = {
-        schema_version: '1',
-        managed_by: 'forge',
-        updated_at: nowIso,
-        sidecar: {
-          ownership_updated_at: nowIso
-        },
-        servers: [...existingWithoutTarget, entry].sort((left, right) =>
-          left.package_id.localeCompare(right.package_id)
-        )
-      };
+        const next = createScopeFilePayload(
+          nowIso,
+          [...existingWithoutTarget, entry].sort((left, right) =>
+            left.package_id.localeCompare(right.package_id)
+          )
+        );
 
-      await writeFileAtomically(fsOps, scope.scope_path, toJson(next));
+        await writeFileAtomically(fsOps, scope.scope_path, toJson(next));
+      });
       await lifecycleHooks.on_after_write(entry, scope);
     },
 
     async remove_entry(scope, packageId) {
-      ensureDaemonOwned(scope);
+      assertMutableScopeOwnership(scope);
 
-      const nowIso = now().toISOString();
-      const record = await readScopeFile(fsOps, scope.scope_path, nowIso);
-      const next: CopilotScopeFile = {
-        schema_version: '1',
-        managed_by: 'forge',
-        updated_at: nowIso,
-        sidecar: {
-          ownership_updated_at: nowIso
-        },
-        servers: record.servers
+      await withScopeLock(scope.scope_path, async () => {
+        const nowIso = now().toISOString();
+        const record = await readScopeFile(fsOps, scope.scope_path, nowIso);
+        if (!record.exists) {
+          return;
+        }
+
+        assertMutableScopeOwnership(scope, record);
+
+        const remaining = record.servers
           .filter((candidate) => candidate.package_id !== packageId)
-          .sort((left, right) => left.package_id.localeCompare(right.package_id))
-      };
+          .sort((left, right) => left.package_id.localeCompare(right.package_id));
 
-      await writeFileAtomically(fsOps, scope.scope_path, toJson(next));
+        if (remaining.length === record.servers.length) {
+          return;
+        }
+
+        const next = createScopeFilePayload(nowIso, remaining);
+        await writeFileAtomically(fsOps, scope.scope_path, toJson(next));
+      });
     },
 
     async policy_preflight(input) {

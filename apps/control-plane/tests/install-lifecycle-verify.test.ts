@@ -31,6 +31,7 @@ class VerifyPlanFakeDb implements PostgresTransactionalQueryExecutor {
     reason_code:
       | 'policy_preflight_blocked'
       | 'trust_gate_blocked'
+      | 'no_writable_scope_available'
       | 'preflight_checks_failed'
       | 'start_or_connect_failed'
       | 'remote_sse_hook_missing'
@@ -147,6 +148,7 @@ class VerifyPlanFakeDb implements PostgresTransactionalQueryExecutor {
         reason_code: params[3] as
           | 'policy_preflight_blocked'
           | 'trust_gate_blocked'
+          | 'no_writable_scope_available'
           | 'preflight_checks_failed'
           | 'start_or_connect_failed'
           | 'remote_sse_hook_missing'
@@ -225,8 +227,8 @@ function createInMemoryIdempotency(): LifecycleIdempotencyAdapter {
   };
 }
 
-function createTestCopilotAdapter(): CopilotAdapterContract {
-  const scopes: CopilotScopeDescriptor[] = [
+function createTestCopilotAdapter(
+  scopes: CopilotScopeDescriptor[] = [
     {
       scope: 'workspace',
       scope_path: '/tmp/workspace.json',
@@ -241,8 +243,8 @@ function createTestCopilotAdapter(): CopilotAdapterContract {
       approved: false,
       daemon_owned: true
     }
-  ];
-
+  ]
+): CopilotAdapterContract {
   const allowedPolicy: PolicyPreflightResult = {
     outcome: 'allowed',
     reason_code: null,
@@ -307,10 +309,14 @@ class RuntimeVerifierSpy {
   }
 }
 
-function createService(db: VerifyPlanFakeDb, runtimeVerifier: RuntimeVerifierSpy) {
+function createService(
+  db: VerifyPlanFakeDb,
+  runtimeVerifier: RuntimeVerifierSpy,
+  copilotAdapter: CopilotAdapterContract = createTestCopilotAdapter()
+) {
   return createInstallLifecycleService({
     db,
-    copilotAdapter: createTestCopilotAdapter(),
+    copilotAdapter,
     runtimeVerifier,
     idempotency: createInMemoryIdempotency(),
     now: () => new Date('2026-03-01T12:00:00Z')
@@ -414,6 +420,80 @@ describe('install lifecycle verify', () => {
 
     expect(runtimeVerifier.requests[0]?.correlation_id).toBe('corr-explicit-verify');
     expect(runtimeVerifier.requests[1]?.correlation_id).toBe('corr-plan-verify-001');
+  });
+
+  it('passes daemon ownership through to runtime verification and surfaces no writable scope failures', async () => {
+    const db = new VerifyPlanFakeDb('apply_succeeded');
+    const runtimeVerifier = new RuntimeVerifierSpy({
+      ready: false,
+      failure_reason_code: 'no_writable_scope_available',
+      final_trust_state: 'trusted',
+      policy: {
+        outcome: 'allowed',
+        reason_code: null,
+        install_allowed: true,
+        runtime_allowed: true,
+        trust_transition: 'none',
+        warnings: []
+      },
+      scope_resolution: {
+        ordered_writable_scopes: [],
+        blocked_scopes: [
+          {
+            scope: 'workspace',
+            scope_path: '/tmp/foreign-workspace.json',
+            writable: true,
+            approved: true,
+            daemon_owned: false
+          }
+        ]
+      },
+      stages: [
+        {
+          stage: 'policy_preflight',
+          ok: true,
+          details: ['allowed']
+        },
+        {
+          stage: 'trust_gate',
+          ok: true,
+          details: ['trust_state=trusted']
+        },
+        {
+          stage: 'preflight_checks',
+          ok: false,
+          details: ['workspace:scope_not_daemon_owned']
+        }
+      ]
+    });
+
+    const service = createService(
+      db,
+      runtimeVerifier,
+      createTestCopilotAdapter([
+        {
+          scope: 'workspace',
+          scope_path: '/tmp/foreign-workspace.json',
+          writable: true,
+          approved: true,
+          daemon_owned: false
+        }
+      ])
+    );
+
+    const response = await service.verifyPlan(PLAN_ID, 'idem-verify-owned-scope', null);
+
+    expect(runtimeVerifier.requests[0]?.scope_candidates).toEqual([
+      {
+        scope: 'workspace',
+        scope_path: '/tmp/foreign-workspace.json',
+        writable: true,
+        approved: true,
+        daemon_owned: false
+      }
+    ]);
+    expect(response.reason_code).toBe('no_writable_scope_available');
+    expect(db.verifyAttempts[0]?.reason_code).toBe('no_writable_scope_available');
   });
 
   it('replays verify when idempotency key is reused with same payload', async () => {

@@ -18,7 +18,15 @@ function buildRemoteRequest() {
     transport: 'streamable-http' as const,
     trust_state: 'trusted' as const,
     trust_reset_trigger: 'none' as const,
-    scope_candidates: [],
+    scope_candidates: [
+      {
+        scope: 'workspace' as const,
+        scope_path: '/workspace',
+        writable: true,
+        approved: true,
+        daemon_owned: true
+      }
+    ],
     policy_input: {
       org_id: 'org-1',
       package_id: 'pkg-remote-1',

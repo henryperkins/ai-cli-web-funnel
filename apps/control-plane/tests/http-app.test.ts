@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { CopilotAdapterContract } from '@forge/copilot-vscode-adapter';
 import { INSTALL_LIFECYCLE_HTTP_ERROR_REASON } from '@forge/shared-contracts';
 import {
   InMemoryReporterDirectory,
@@ -266,6 +267,60 @@ class MinimalNoopDb implements PostgresQueryExecutor {
   }
 }
 
+function createStubCopilotAdapter(): CopilotAdapterContract {
+  return {
+    async discover_scopes() {
+      return [
+        {
+          scope: 'workspace',
+          scope_path: '/tmp/forge-workspace/.vscode/mcp.json',
+          writable: true,
+          approved: true,
+          daemon_owned: true
+        }
+      ];
+    },
+    async read_entry() {
+      return null;
+    },
+    async write_entry() {
+      return;
+    },
+    async remove_entry() {
+      return;
+    },
+    async policy_preflight() {
+      return {
+        outcome: 'allowed',
+        install_allowed: true,
+        runtime_allowed: true,
+        reason_code: null,
+        warnings: [],
+        policy_blocked: false,
+        blocked_by: 'none'
+      };
+    },
+    lifecycle_hooks: {
+      async on_before_write() {
+        return;
+      },
+      async on_after_write() {
+        return;
+      },
+      async on_lifecycle() {
+        return;
+      },
+      async on_health_check() {
+        return {
+          healthy: true,
+          details: []
+        };
+      }
+    },
+    remote_hooks: {}
+  };
+}
+
 describe('forge http app composition', () => {
   it('routes /v1/events and preserves route-level headers for replay status', async () => {
     const app = createForgeHttpApp({
@@ -404,6 +459,7 @@ describe('forge http app composition', () => {
   it('supports postgres/query-executor and signature verifier injection for app composition', async () => {
     const app = createForgeHttpAppFromPostgres({
       db: new MinimalNoopDb(),
+      copilotAdapter: createStubCopilotAdapter(),
       signatureVerifier: {
         async verify() {
           return true;
@@ -419,6 +475,16 @@ describe('forge http app composition', () => {
     });
 
     expect(health.statusCode).toBe(200);
+  });
+
+  it('fails closed when postgres app composition omits VS Code adapter config', () => {
+    expect(() =>
+      createForgeHttpAppFromPostgres({
+        db: new MinimalNoopDb()
+      })
+    ).toThrow(
+      'control_plane_vscode_adapter_config_missing: inject copilotAdapter or provide copilotAdapterPaths'
+    );
   });
 
   it('serves catalog list/detail/search routes with deterministic status handling', async () => {

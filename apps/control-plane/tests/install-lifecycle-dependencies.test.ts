@@ -437,7 +437,7 @@ describe('install lifecycle dependency resolution', () => {
     ]);
     expect(response.explainability?.required_actions).toEqual([
       'Adjust requested permissions to satisfy policy caps and disallowed-permission rules.',
-      'Ensure at least one approved writable runtime scope is available for the target client.',
+      'Ensure at least one approved, writable, daemon-owned runtime scope is available for the target client.',
       'Remove duplicate dependency edges to avoid ambiguous resolution order.',
       'Resolve conflicting dependency version constraints before creating a plan.',
       'Review org policy/security enforcement and resolve blocking reason codes before apply.'

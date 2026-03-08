@@ -1,11 +1,13 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import process from 'node:process';
+import type { CopilotAdapterContract } from '@forge/copilot-vscode-adapter';
 import { Pool, type PoolClient } from 'pg';
 import { createForgeHttpAppFromPostgres, createForgeHttpNodeListener } from './http-app.js';
 import { startControlPlaneRetrievalSearchService } from './retrieval-bootstrap.js';
 import { validateControlPlaneStartupEnv } from './startup-env-validation.js';
 import type {
+  ControlPlaneCopilotAdapterPaths,
   InstallLifecycleLogger,
   InstallRuntimeVerifier,
   PostgresQueryExecutor,
@@ -44,6 +46,7 @@ export interface ControlPlaneEnvConfig {
   port: number;
   databaseUrl: string;
   requireRetrievalBootstrap: boolean;
+  vscodeAdapterPaths?: ControlPlaneCopilotAdapterPaths;
 }
 
 export interface ControlPlaneServerHandle {
@@ -72,6 +75,8 @@ export interface ControlPlaneServerOptions {
       signature: string;
     }): Promise<boolean>;
   };
+  copilotAdapter?: CopilotAdapterContract;
+  copilotAdapterPaths?: ControlPlaneCopilotAdapterPaths;
 }
 
 export interface ControlPlaneServerFromEnvOptions {
@@ -84,6 +89,12 @@ export interface ControlPlaneServerFromEnvOptions {
   runtimeVerifier?: InstallRuntimeVerifier;
   installLogger?: InstallLifecycleLogger;
   startupLogger?: ControlPlaneStartupLogger;
+  copilotAdapter?: CopilotAdapterContract;
+  copilotAdapterPaths?: ControlPlaneCopilotAdapterPaths;
+}
+
+export interface LoadControlPlaneEnvConfigOptions {
+  requireVscodeAdapterPaths?: boolean;
 }
 
 const defaultStartupLogger: ControlPlaneStartupLogger = {
@@ -106,9 +117,13 @@ function parsePort(value: string | undefined, fallback: number): number {
 }
 
 export function loadControlPlaneEnvConfig(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  options: LoadControlPlaneEnvConfigOptions = {}
 ): ControlPlaneEnvConfig {
-  const validation = validateControlPlaneStartupEnv(env);
+  const requireVscodeAdapterPaths = options.requireVscodeAdapterPaths ?? true;
+  const validation = validateControlPlaneStartupEnv(env, {
+    requireVscodeAdapterPaths
+  });
   if (!validation.ok) {
     throw new Error(`control_plane_env_invalid:${validation.errors.join(';')}`);
   }
@@ -122,12 +137,20 @@ export function loadControlPlaneEnvConfig(
   const port = parsePort(env.FORGE_PORT, 8787);
   const requireRetrievalBootstrap =
     (env.FORGE_REQUIRE_RETRIEVAL_BOOTSTRAP ?? 'false').toLowerCase() === 'true';
+  const vscodeAdapterPaths = requireVscodeAdapterPaths
+    ? {
+        workspaceRoot: env.FORGE_VSCODE_WORKSPACE_ROOT!.trim(),
+        userProfilePath: env.FORGE_VSCODE_USER_PROFILE_PATH!.trim(),
+        daemonDefaultPath: env.FORGE_VSCODE_DAEMON_DEFAULT_PATH!.trim()
+      }
+    : undefined;
 
   return {
     host,
     port,
     databaseUrl,
-    requireRetrievalBootstrap
+    requireRetrievalBootstrap,
+    ...(vscodeAdapterPaths ? { vscodeAdapterPaths } : {})
   };
 }
 
@@ -138,7 +161,7 @@ export function createPoolQueryExecutor(
     sql: string,
     params: readonly unknown[] = []
   ): Promise<PostgresQueryResult<Row>> => {
-    const result = await pool.query(sql, params);
+    const result = await pool.query(sql, params as unknown[]);
     return {
       rows: result.rows as Row[],
       rowCount: result.rowCount
@@ -157,7 +180,7 @@ export function createPoolQueryExecutor(
           sql: string,
           params: readonly unknown[] = []
         ): Promise<PostgresQueryResult<Row>> {
-          const result = await client.query(sql, params);
+          const result = await client.query(sql, params as unknown[]);
           return {
             rows: result.rows as Row[],
             rowCount: result.rowCount
@@ -212,6 +235,16 @@ export async function startForgeControlPlaneServer(
           installLogger: options.installLogger
         }
       : {}),
+    ...(options.copilotAdapter
+      ? {
+          copilotAdapter: options.copilotAdapter
+        }
+      : {}),
+    ...(options.copilotAdapterPaths
+      ? {
+          copilotAdapterPaths: options.copilotAdapterPaths
+        }
+      : {}),
     readinessProbe: async () => readinessState
   });
 
@@ -257,7 +290,9 @@ export async function startForgeControlPlaneServer(
 export async function startForgeControlPlaneServerFromEnv(
   options: ControlPlaneServerFromEnvOptions = {}
 ): Promise<ControlPlaneServerHandle> {
-  const config = loadControlPlaneEnvConfig(options.env);
+  const config = loadControlPlaneEnvConfig(options.env, {
+    requireVscodeAdapterPaths: !options.copilotAdapter && !options.copilotAdapterPaths
+  });
   const pool = new Pool({
     connectionString: config.databaseUrl
   });
@@ -287,6 +322,10 @@ export async function startForgeControlPlaneServerFromEnv(
     readinessState
   });
 
+  const resolvedCopilotAdapterPaths = options.copilotAdapter
+    ? undefined
+    : options.copilotAdapterPaths ?? config.vscodeAdapterPaths;
+
   const serverHandle = await startForgeControlPlaneServer({
     db,
     host: config.host,
@@ -294,7 +333,9 @@ export async function startForgeControlPlaneServerFromEnv(
     readinessState,
     ...(retrievalSearchService ? { retrievalSearchService } : {}),
     ...(options.runtimeVerifier ? { runtimeVerifier: options.runtimeVerifier } : {}),
-    ...(options.installLogger ? { installLogger: options.installLogger } : {})
+    ...(options.installLogger ? { installLogger: options.installLogger } : {}),
+    ...(options.copilotAdapter ? { copilotAdapter: options.copilotAdapter } : {}),
+    ...(resolvedCopilotAdapterPaths ? { copilotAdapterPaths: resolvedCopilotAdapterPaths } : {})
   });
 
   const originalClose = serverHandle.close.bind(serverHandle);

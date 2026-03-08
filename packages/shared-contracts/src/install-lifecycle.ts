@@ -90,6 +90,7 @@ export const INSTALL_LIFECYCLE_EXECUTION_REASON_CODE = {
   adapterRemoveFailed: 'adapter_remove_failed',
   policyPreflightBlocked: 'policy_preflight_blocked',
   trustGateBlocked: 'trust_gate_blocked',
+  noWritableScopeAvailable: 'no_writable_scope_available',
   preflightChecksFailed: 'preflight_checks_failed',
   startOrConnectFailed: 'start_or_connect_failed',
   remoteSseHookMissing: 'remote_sse_hook_missing',

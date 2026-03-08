@@ -97,9 +97,8 @@ Important governance boundary:
    - `docs/contracts/v1-addon-metadata-contract.md`
    - `docs/contracts/v1-lifecycle-api-contract.md`
 3. Compatibility matrix: `docs/compatibility-matrix.md`
-4. Open architecture/product questions: `application_master_open_questions.md`, `master_open_questions.md`
-5. Execution guardrails: `OPEN_QUESTIONS_TRACKER.md`, `DECISION_LOG.md`
-6. Operational runbooks:
+4. Execution guardrails: `OPEN_QUESTIONS_TRACKER.md`, `DECISION_LOG.md`
+5. Operational runbooks:
    - `docs/runbooks/profile-lifecycle-operations.md`
    - `docs/runbooks/slo-rollup-operations.md`
    - `docs/runbooks/retrieval-sync-backfill-and-recovery.md`
@@ -107,8 +106,8 @@ Important governance boundary:
    - `docs/runbooks/semantic-retrieval-incident-fallback.md`
    - `docs/runbooks/cron-failure-triage-and-replay-recovery.md`
    - `docs/runbooks/security-trust-gate-operations.md`
-7. CI and validation contract: `docs/ci-verification.md`
-8. Wave build reports:
+6. CI and validation contract: `docs/ci-verification.md`
+7. Wave build reports:
    - `docs/wave3-build-report.md`
    - `docs/wave4-build-report.md`
    - `docs/wave5-build-report.md`
@@ -117,10 +116,10 @@ Important governance boundary:
    - `docs/wave8-build-report.md`
    - `docs/wave9-build-report.md`
    - `docs/wave10-build-report.md`
-9. Execution plans: `docs/wave6-execution-plan.md`, `docs/wave7-execution-plan.md`, `docs/wave9-execution-plan.md`
-10. Application completion backlog: `docs/application-completion-backlog.md`
-11. Immediate execution plans: `docs/immediate-execution-plans/README.md`, `docs/immediate-execution-plans/phase-2/README.md`, `docs/immediate-execution-plans/phase-3/README.md`
-12. Distribution and release policy: `docs/distribution-and-upgrade-policy.md`, `docs/release-checklist.md`, `docs/release-evidence-template.md`
+8. Execution plans: `docs/wave6-execution-plan.md`, `docs/wave7-execution-plan.md`, `docs/wave9-execution-plan.md`
+9. Application completion backlog: `docs/application-completion-backlog.md`
+10. Immediate execution plans: `docs/immediate-execution-plans/README.md`, `docs/immediate-execution-plans/phase-2/README.md`, `docs/immediate-execution-plans/phase-3/README.md`
+11. Distribution and release policy: `docs/distribution-and-upgrade-policy.md`, `docs/release-checklist.md`, `docs/release-evidence-template.md`
 13. Beta/GA artifacts: `docs/beta-pilot-plan.md`, `docs/beta-triage-playbook.md`, `docs/ga-readiness-review-template.md`, `docs/ga-launch-report-template.md`
 
 ## Commands
@@ -143,7 +142,7 @@ npm run run:slo-rollup -- --mode dry-run --from 2026-02-28T00:00:00Z --to 2026-0
 npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from 2026-02-21T00:00:00Z --window-to 2026-02-28T00:00:00Z --trigger manual
 npm run run:security-promotion -- --mode dry-run --package-id <uuid> --reviewer-id <id> --evidence-ref <ticket-id>
 npm run run:beta-readiness -- --mode dry-run --from 2026-02-21T00:00:00Z --to 2026-02-28T00:00:00Z
-npm run run:control-plane
+npm run run:control-plane  # requires DB env + FORGE_VSCODE_* adapter target envs unless adapter is injected in-process
 scripts/local-stack-up.sh    # Bootstrap Postgres + Qdrant via docker-compose
 scripts/local-stack-down.sh  # Tear down local stack (preserves volumes)
 ```
