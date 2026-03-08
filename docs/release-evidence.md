@@ -2,7 +2,7 @@
 
 Release: `v0.2.0-rc.1`
 Date: `2026-03-08`
-Commit: `<pending-final-rc-commit>`
+Commit: `f151dcf`
 
 STATUS: DRAFT
 
@@ -33,7 +33,7 @@ STATUS: DRAFT
 
 ## Artifact Integrity
 
-- Source bundle: `<pending final RC package from clean commit>`
+- Source bundle: `artifacts/forge-candidate-0.2.0-rc.1-f151dcf.tar.gz` (planned final package name from clean commit `f151dcf`)
 - Checksum manifest: `artifacts/release.sha256` (regenerate during final package step)
 - Checksum: `<pending>`
 - Signature file: `artifacts/release.sha256.asc` (pending: GPG signing key not available in local environment; enforced in CI via `FORGE_RELEASE_GPG_PRIVATE_KEY_B64`)
@@ -45,15 +45,15 @@ STATUS: DRAFT
 ## Beta Outcomes
 
 - Beta readiness status: `blocked` (pilot execution has not started; all tooling is ready)
-- Beta readiness report reference: pending E10-S1 pilot execution
+- Beta readiness report reference: `artifacts/beta-readiness-report.json` (baseline artifact generated; all KPI windows currently `insufficient_data`)
 - Triage playbook reference: `docs/beta-triage-playbook.md`
-- GA readiness review reference: `docs/ga-readiness-review-template.md`
+- GA readiness review reference: `docs/ga-readiness-review-2026-03-08.md`
 
 ## Deferred Items
 
 | Item | Owner | Follow-up Date | Rationale |
 | --- | --- | --- | --- |
-| Final RC commit + package regeneration | Release Manager + Platform | 2026-03-10 | current draft reflects release-hardening work that is not yet captured in a committed RC revision |
+| Final package generation from commit `f151dcf` | Release Manager + Platform | 2026-03-10 | package step must be rerun after evidence approval and signing material are available |
 | Human sign-offs + evidence promotion to `APPROVED` | Release Manager + Security + QA + Platform | 2026-03-10 | release workflow will reject draft evidence and placeholder sign-offs |
 | GPG signature verification (local) | Platform Ops | 2026-03-10 | signing key is a CI-only secret; workflow enforces before publish |
 | Beta pilot KPI population | Product | 2026-03-10 | artifacts/scripts ready; live pilot not yet started |
