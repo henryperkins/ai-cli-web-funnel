@@ -1,0 +1,25 @@
+{
+  "name": "@forge/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "forge": "./bin/forge.mjs"
+  },
+  "main": "./dist/cli-main.js",
+  "types": "./src/cli-main.ts",
+  "exports": {
+    ".": {
+      "types": "./src/cli-main.ts",
+      "default": "./dist/cli-main.js"
+    }
+  },
+  "dependencies": {
+    "@forge/shared-contracts": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run tests"
+  }
+}

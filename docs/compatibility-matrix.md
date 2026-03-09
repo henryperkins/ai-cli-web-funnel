@@ -1,7 +1,7 @@
 # Compatibility Matrix (v1)
 
 Status: Active
-Last Updated: 2026-02-28
+Last Updated: 2026-03-09
 
 This matrix defines the v1 support boundary for clients, modes, and transports.
 
@@ -12,6 +12,7 @@ This matrix defines the v1 support boundary for clients, modes, and transports.
 | `vscode_copilot` | `local` | `stdio` | `ga` | Primary v1 path; install/update/remove/rollback/verify supported. |
 | `vscode_copilot` | `remote` | `sse` | `planned` | Runtime flags/hooks exist; not in GA adapter scope. |
 | `vscode_copilot` | `remote` | `streamable-http` | `planned` | Runtime flags/hooks exist; not in GA adapter scope. |
+| `forge_cli` | `local` | `http` | `preview` | CLI wraps control-plane HTTP API; no direct adapter writes. |
 | `other_client` | `local` | `stdio` | `planned` | No GA adapter implementation in this repo baseline. |
 
 ## Scope Lock

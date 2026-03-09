@@ -228,6 +228,10 @@ export function createCatalogRouteService(dependencies: CatalogRouteDependencies
       return dependencies.catalog.listPackages(normalizeLimit(limit), Math.max(0, offset));
     },
 
+    async resolvePackageBySlug(slug: string): Promise<CatalogPackageListItem | null> {
+      return dependencies.catalog.getPackageBySlug(slug);
+    },
+
     async getPackage(packageId: string): Promise<CatalogPackageDetailResponse | null> {
       const detail = await dependencies.catalog.getPackage(packageId);
       if (!detail) {

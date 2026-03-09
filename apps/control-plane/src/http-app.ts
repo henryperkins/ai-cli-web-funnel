@@ -357,6 +357,46 @@ export function createForgeHttpApp(dependencies: ForgeHttpAppDependencies) {
         return jsonResponse(200, freshness);
       }
 
+      if (request.method === 'GET' && path === '/v1/packages/resolve') {
+        if (!dependencies.catalogRoutes) {
+          return jsonResponse(503, {
+            status: 'not_ready',
+            reason: 'catalog_routes_unavailable'
+          });
+        }
+
+        const slug = parsedPath.query.get('slug');
+        if (typeof slug !== 'string' || slug.trim().length === 0) {
+          return jsonResponse(422, {
+            status: 'invalid_request',
+            reason: 'slug_required'
+          });
+        }
+
+        let resolvedPackage;
+        try {
+          resolvedPackage = await dependencies.catalogRoutes.resolvePackageBySlug(slug);
+        } catch (error) {
+          if (error instanceof Error && error.message === 'package_slug_ambiguous') {
+            return jsonResponse(409, {
+              status: 'conflict',
+              reason: 'package_slug_ambiguous'
+            });
+          }
+
+          throw error;
+        }
+
+        if (!resolvedPackage) {
+          return jsonResponse(404, {
+            status: 'not_found',
+            reason: 'package_not_found'
+          });
+        }
+
+        return jsonResponse(200, resolvedPackage);
+      }
+
       if (request.method === 'GET' && /^\/v1\/packages\/[^/]+$/i.test(path)) {
         if (!dependencies.catalogRoutes) {
           return jsonResponse(503, {
@@ -1190,8 +1230,9 @@ export function createForgeHttpAppFromPostgres(
     ...(dependencies.idFactory ? { idFactory: dependencies.idFactory } : {})
   };
 
+  const catalogAdapters = createCatalogPostgresAdapters({ db: dependencies.db });
   const catalogRoutes = createCatalogRouteService({
-    catalog: createCatalogPostgresAdapters({ db: dependencies.db }),
+    catalog: catalogAdapters,
     ...(dependencies.retrievalSearchService
       ? {
           retrieval: {
@@ -1361,6 +1402,7 @@ export function createForgeHttpAppFromPostgres(
   const profileRoutes = createProfileRouteService({
     profileAdapters: createProfilePostgresAdapters({ db: dependencies.db }),
     installLifecycle,
+    catalogAdapters,
     ...(dependencies.idFactory ? { idFactory: dependencies.idFactory } : {})
   });
 

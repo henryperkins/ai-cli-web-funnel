@@ -122,6 +122,31 @@ Important governance boundary:
 11. Distribution and release policy: `docs/distribution-and-upgrade-policy.md`, `docs/release-checklist.md`, `docs/release-evidence-template.md`
 13. Beta/GA artifacts: `docs/beta-pilot-plan.md`, `docs/beta-triage-playbook.md`, `docs/ga-readiness-review-template.md`, `docs/ga-launch-report-template.md`
 
+## Forge CLI (Preview)
+
+The repo includes a user-facing `forge` command that wraps the control-plane HTTP API:
+
+```bash
+npm run forge -- search "mcp server fetch"   # discover
+npm run forge -- plan <package_id_or_exact_slug> --org-id my-org --org-policy-file ./org-policy.json
+npm run forge -- install <plan_id>            # install
+npm run forge -- verify <plan_id>             # verify
+npm run forge -- update <plan_id>             # update
+npm run forge -- remove <plan_id>             # remove
+npm run forge -- rollback <plan_id>           # rollback
+npm run forge -- status <plan_id>             # status
+npm run forge -- profile list                 # profiles
+npm run forge -- profile export <profile_id> --output profile.json
+npm run forge -- profile import profile.json
+npm run forge -- profile install <profile_id> --org-id my-org --org-policy-file ./org-policy.json
+npm run forge -- health                       # health
+```
+
+Support level: `preview`. Requires a running control-plane. `forge plan` and
+`forge profile install` now require an explicit org policy file; plan creation
+uses catalog-declared permissions by default and fails closed when permission
+metadata is missing. See `docs/quickstart.md`.
+
 ## Commands
 
 ```bash

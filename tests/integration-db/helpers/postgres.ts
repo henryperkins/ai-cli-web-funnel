@@ -138,6 +138,29 @@ export async function seedPackage(pool: Pool, packageId: string): Promise<void> 
     `,
     [packageId, `seed/${packageId}`]
   );
+
+  await pool.query(
+    `
+      INSERT INTO package_field_lineage (
+        package_id,
+        field_name,
+        field_value_json,
+        field_source,
+        field_source_updated_at,
+        merge_run_id
+      )
+      VALUES (
+        $1::uuid,
+        'permissions',
+        '[]'::jsonb,
+        'integration_seed',
+        now(),
+        $2
+      )
+      ON CONFLICT (package_id, field_name, merge_run_id) DO NOTHING
+    `,
+    [packageId, `seed-permissions:${packageId}`]
+  );
 }
 
 export async function seedReporter(

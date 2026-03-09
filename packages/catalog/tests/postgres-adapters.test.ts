@@ -64,6 +64,51 @@ class FakeDb implements PostgresQueryExecutor {
       };
     }
 
+    if (sql.includes("AND field_name = 'permissions'")) {
+      return {
+        rows: [
+          {
+            field_value_json: ['read:config', 'write:settings']
+          }
+        ] as Row[],
+        rowCount: 1
+      };
+    }
+
+    if (sql.includes('WHERE lower(p.package_slug) = $1')) {
+      if (params[0] === 'duplicate/slug') {
+        return {
+          rows: [
+            {
+              package_id: '8fb39ece-2024-4f50-aa89-e78758e65e74',
+              package_slug: 'duplicate/slug',
+              canonical_repo: 'github.com/acme/forge',
+              updated_at: '2026-03-01T00:00:00Z'
+            },
+            {
+              package_id: '1b5f147c-91f7-408d-8d8d-02b6ea2fd7fd',
+              package_slug: 'duplicate/slug',
+              canonical_repo: 'github.com/acme/forge-2',
+              updated_at: '2026-03-01T00:00:00Z'
+            }
+          ] as Row[],
+          rowCount: 2
+        };
+      }
+
+      return {
+        rows: [
+          {
+            package_id: '8fb39ece-2024-4f50-aa89-e78758e65e74',
+            package_slug: 'acme/forge',
+            canonical_repo: 'github.com/acme/forge',
+            updated_at: '2026-03-01T00:00:00Z'
+          }
+        ] as Row[],
+        rowCount: 1
+      };
+    }
+
     if (sql.includes('FROM package_aliases')) {
       return {
         rows: [
@@ -143,7 +188,7 @@ describe('catalog postgres adapters', () => {
     );
   });
 
-  it('returns package list, detail, and search read models', async () => {
+  it('returns package list, detail, exact slug, and search read models', async () => {
     const db = new FakeDb();
     const adapters = createCatalogPostgresAdapters({ db });
 
@@ -156,8 +201,21 @@ describe('catalog postgres adapters', () => {
     )) as CatalogPackageDetail;
     expect(detail.aliases).toHaveLength(1);
     expect(detail.lineage_summary).toHaveLength(1);
+    expect(detail.declared_permissions).toEqual(['read:config', 'write:settings']);
+
+    const exact = await adapters.getPackageBySlug(' Acme/Forge ');
+    expect(exact?.package_id).toBe('8fb39ece-2024-4f50-aa89-e78758e65e74');
 
     const search = await adapters.searchPackages('forge', 5);
     expect(search).toHaveLength(1);
+  });
+
+  it('fails closed when an exact slug resolves to multiple packages', async () => {
+    const db = new FakeDb();
+    const adapters = createCatalogPostgresAdapters({ db });
+
+    await expect(adapters.getPackageBySlug('duplicate/slug')).rejects.toThrow(
+      'package_slug_ambiguous'
+    );
   });
 });

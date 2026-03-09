@@ -514,6 +514,23 @@ function buildApp() {
   const profileRoutes = createProfileRouteService({
     profileAdapters,
     installLifecycle: lifecycle,
+    catalogAdapters: {
+      async getPackage(packageId: string) {
+        if (packageId !== PACKAGE_A && packageId !== PACKAGE_B) {
+          return null;
+        }
+
+        return {
+          package_id: packageId,
+          package_slug: packageId === PACKAGE_A ? 'acme/addon-a' : 'acme/addon-b',
+          canonical_repo: `github.com/acme/${packageId === PACKAGE_A ? 'addon-a' : 'addon-b'}`,
+          updated_at: '2026-03-01T12:00:00Z',
+          aliases: [],
+          lineage_summary: [],
+          declared_permissions: ['read:config']
+        };
+      }
+    },
     idFactory
   });
 

@@ -363,7 +363,8 @@ describe('e2e local: discover -> plan -> install -> verify', () => {
             canonical_repo: 'github.com/acme/forge-addon',
             updated_at: '2026-03-01T00:00:00Z',
             aliases: [],
-            lineage_summary: []
+            lineage_summary: [],
+            declared_permissions: ['read:config']
           };
         },
         async searchPackages() {

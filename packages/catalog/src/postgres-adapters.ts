@@ -52,6 +52,7 @@ export interface CatalogPackageLineageSummaryRecord {
 export interface CatalogPackageDetail extends CatalogPackageListItem {
   aliases: CatalogPackageAliasRecord[];
   lineage_summary: CatalogPackageLineageSummaryRecord[];
+  declared_permissions: string[] | null;
 }
 
 export type CatalogSourceFreshnessStatus = 'succeeded' | 'failed';
@@ -109,6 +110,7 @@ export interface CatalogPostgresAdapters {
   persistIngestResult(result: CatalogIngestResult): Promise<CatalogIngestPersistenceResult>;
   listPackages(limit: number, offset: number): Promise<CatalogPackageListItem[]>;
   getPackage(packageId: string): Promise<CatalogPackageDetail | null>;
+  getPackageBySlug(slug: string): Promise<CatalogPackageListItem | null>;
   searchPackages(query: string, limit: number): Promise<CatalogPackageListItem[]>;
   recordSourceFreshness?(input: CatalogSourceFreshnessUpsertInput): Promise<void>;
   listSourceFreshness?(): Promise<CatalogSourceFreshnessRecord[]>;
@@ -147,6 +149,41 @@ function normalizeSearchQuery(query: string): string {
     return '';
   }
   return `%${trimmed.replace(/[%_]/g, '')}%`;
+}
+
+function normalizePackageSlug(slug: string): string {
+  return slug.trim().toLowerCase();
+}
+
+function normalizeDeclaredPermissions(value: unknown): string[] | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      return null;
+    }
+
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) {
+      return null;
+    }
+
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      normalized.push(trimmed);
+    }
+  }
+
+  return normalized;
 }
 
 function clampStaleAfterMinutes(value: number | undefined): number {
@@ -468,11 +505,55 @@ export function createCatalogPostgresAdapters(
         [packageId]
       );
 
+      const permissionsResult = await options.db.query<{ field_value_json: unknown }>(
+        `
+          SELECT
+            field_value_json
+          FROM package_field_lineage
+          WHERE package_id = $1::uuid
+            AND field_name = 'permissions'
+          ORDER BY resolved_at DESC
+          LIMIT 1
+        `,
+        [packageId]
+      );
+
       return {
         ...packageRow,
         aliases: aliasesResult.rows,
-        lineage_summary: lineageResult.rows
+        lineage_summary: lineageResult.rows,
+        declared_permissions: normalizeDeclaredPermissions(
+          permissionsResult.rows[0]?.field_value_json
+        )
       } satisfies CatalogPackageDetail;
+    },
+
+    async getPackageBySlug(slug) {
+      const normalizedSlug = normalizePackageSlug(slug);
+      if (normalizedSlug.length === 0) {
+        return null;
+      }
+
+      const result = await options.db.query<CatalogPackageListItem>(
+        `
+          SELECT
+            p.id::text AS package_id,
+            p.package_slug,
+            p.canonical_repo,
+            p.updated_at::text AS updated_at
+          FROM registry.packages p
+          WHERE lower(p.package_slug) = $1
+          ORDER BY p.updated_at DESC, p.id::text ASC
+          LIMIT 2
+        `,
+        [normalizedSlug]
+      );
+
+      if (result.rows.length > 1) {
+        throw new Error('package_slug_ambiguous');
+      }
+
+      return result.rows[0] ?? null;
     },
 
     async searchPackages(query, limit) {

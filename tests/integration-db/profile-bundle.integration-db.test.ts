@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
+import { createCatalogPostgresAdapters } from '../../packages/catalog/src/postgres-adapters.js';
 import { createCopilotVscodeAdapterContract } from '../../apps/copilot-vscode-adapter/src/index.js';
 import {
   createInstallLifecycleService,
@@ -31,6 +32,7 @@ describe('integration-db: profile bundle create, export/import, and install life
     connectionString: databaseUrl
   });
   const db = createIntegrationDbExecutor(pool);
+  const catalogAdapters = createCatalogPostgresAdapters({ db });
 
   const PKG_A = '00000000-0000-4000-a000-000000000a01';
   const PKG_B = '00000000-0000-4000-a000-000000000b02';
@@ -62,6 +64,7 @@ describe('integration-db: profile bundle create, export/import, and install life
 
     const service = createProfileRouteService({
       profileAdapters,
+      catalogAdapters,
       idFactory
     });
 
@@ -137,6 +140,7 @@ describe('integration-db: profile bundle create, export/import, and install life
 
     const service = createProfileRouteService({
       profileAdapters,
+      catalogAdapters,
       idFactory
     });
 
@@ -282,6 +286,7 @@ describe('integration-db: profile bundle create, export/import, and install life
       const service = createProfileRouteService({
         profileAdapters,
         installLifecycle,
+        catalogAdapters,
         idFactory
       });
 
@@ -424,6 +429,7 @@ describe('integration-db: profile bundle create, export/import, and install life
       const service = createProfileRouteService({
         profileAdapters,
         installLifecycle,
+        catalogAdapters,
         idFactory
       });
 
@@ -466,7 +472,7 @@ describe('integration-db: profile bundle create, export/import, and install life
 
   it('returns null for a non-existent profile', async () => {
     const profileAdapters = createProfilePostgresAdapters({ db, idFactory });
-    const service = createProfileRouteService({ profileAdapters, idFactory });
+    const service = createProfileRouteService({ profileAdapters, catalogAdapters, idFactory });
 
     const result = await service.getProfile('nonexistent-profile-id');
     expect(result.profile).toBeNull();
@@ -474,7 +480,7 @@ describe('integration-db: profile bundle create, export/import, and install life
 
   it('filters profiles by author_id and visibility', async () => {
     const profileAdapters = createProfilePostgresAdapters({ db, idFactory });
-    const service = createProfileRouteService({ profileAdapters, idFactory });
+    const service = createProfileRouteService({ profileAdapters, catalogAdapters, idFactory });
 
     await service.createProfile({
       name: 'Public Bundle',

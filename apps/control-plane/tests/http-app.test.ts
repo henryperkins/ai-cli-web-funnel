@@ -522,7 +522,24 @@ describe('forge http app composition', () => {
             canonical_repo: 'github.com/acme/catalog-addon',
             updated_at: '2026-03-01T00:00:00Z',
             aliases: [],
-            lineage_summary: []
+            lineage_summary: [],
+            declared_permissions: ['read:config']
+          };
+        },
+        async resolvePackageBySlug(slug: string) {
+          if (slug === 'duplicate/catalog-addon') {
+            throw new Error('package_slug_ambiguous');
+          }
+
+          if (slug !== 'acme/catalog-addon') {
+            return null;
+          }
+
+          return {
+            package_id: '11111111-1111-4111-8111-111111111111',
+            package_slug: 'acme/catalog-addon',
+            canonical_repo: 'github.com/acme/catalog-addon',
+            updated_at: '2026-03-01T00:00:00Z'
           };
         },
         async searchPackages() {
@@ -611,6 +628,30 @@ describe('forge http app composition', () => {
       headers: {},
       body: null
     });
+    const resolveInvalid = await app.handle({
+      method: 'GET',
+      path: '/v1/packages/resolve',
+      headers: {},
+      body: null
+    });
+    const resolveHit = await app.handle({
+      method: 'GET',
+      path: '/v1/packages/resolve?slug=acme%2Fcatalog-addon',
+      headers: {},
+      body: null
+    });
+    const resolveMissing = await app.handle({
+      method: 'GET',
+      path: '/v1/packages/resolve?slug=missing%2Faddon',
+      headers: {},
+      body: null
+    });
+    const resolveAmbiguous = await app.handle({
+      method: 'GET',
+      path: '/v1/packages/resolve?slug=duplicate%2Fcatalog-addon',
+      headers: {},
+      body: null
+    });
     const missing = await app.handle({
       method: 'GET',
       path: '/v1/packages/22222222-2222-4222-8222-222222222222',
@@ -644,6 +685,15 @@ describe('forge http app composition', () => {
     expect((detail.body as { package_id: string }).package_id).toBe(
       '11111111-1111-4111-8111-111111111111'
     );
+    expect(resolveInvalid.statusCode).toBe(422);
+    expect((resolveInvalid.body as { reason: string }).reason).toBe('slug_required');
+    expect(resolveHit.statusCode).toBe(200);
+    expect((resolveHit.body as { package_slug: string | null }).package_slug).toBe(
+      'acme/catalog-addon'
+    );
+    expect(resolveMissing.statusCode).toBe(404);
+    expect(resolveAmbiguous.statusCode).toBe(409);
+    expect((resolveAmbiguous.body as { reason: string }).reason).toBe('package_slug_ambiguous');
     expect(missing.statusCode).toBe(404);
     expect(searchInvalid.statusCode).toBe(422);
     expect(search.statusCode).toBe(200);

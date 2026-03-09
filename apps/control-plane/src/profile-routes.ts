@@ -8,6 +8,7 @@ import type {
   ProfileTargetSdk,
   ProfileVisibility
 } from '@forge/shared-contracts';
+import type { CatalogPostgresAdapters } from '@forge/catalog/postgres-adapters';
 import type { ProfilePostgresAdapters, ProfileListItem } from './profile-postgres-adapters.js';
 
 type InstallLifecycleService = ReturnType<typeof import('./install-lifecycle.js').createInstallLifecycleService>;
@@ -15,6 +16,7 @@ type InstallLifecycleService = ReturnType<typeof import('./install-lifecycle.js'
 export interface ProfileRouteServiceDependencies {
   profileAdapters: ProfilePostgresAdapters;
   installLifecycle?: InstallLifecycleService;
+  catalogAdapters?: Pick<CatalogPostgresAdapters, 'getPackage'>;
   idFactory?: () => string;
 }
 
@@ -61,6 +63,16 @@ type InstallProfilePlanResult = {
   status: 'planned' | 'applied' | 'verified' | 'failed' | 'skipped';
   error?: string;
 };
+
+type PackagePermissionResolution =
+  | {
+      ok: true;
+      requested_permissions: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 const MAX_PROFILE_PACKAGES = 200;
 const MAX_TAGS = 32;
@@ -445,6 +457,35 @@ function toPlanResultStatus(status: ProfileInstallRunPlanStatus):
   return 'failed';
 }
 
+async function resolvePackagePermissionsForProfileInstall(
+  deps: ProfileRouteServiceDependencies,
+  packageId: string
+): Promise<PackagePermissionResolution> {
+  if (!deps.catalogAdapters) {
+    throw new Error('catalog_permissions_unavailable');
+  }
+
+  const detail = await deps.catalogAdapters.getPackage(packageId);
+  if (!detail) {
+    return {
+      ok: false,
+      error: 'package_not_found'
+    };
+  }
+
+  if (detail.declared_permissions === null) {
+    return {
+      ok: false,
+      error: 'package_permissions_missing'
+    };
+  }
+
+  return {
+    ok: true,
+    requested_permissions: [...detail.declared_permissions]
+  };
+}
+
 export function createProfileRouteService(
   deps: ProfileRouteServiceDependencies
 ): ProfileRouteService {
@@ -512,6 +553,7 @@ export function createProfileRouteService(
       const nonPersistedResults: InstallProfilePlanResult[] = [];
 
       const perPlanFailure = new Map<string, string>();
+      const packagePermissionCache = new Map<string, PackagePermissionResolution>();
       const correlationBase = normalizedInput.correlation_id ?? `profile-run:${runId}`;
 
       let failedWithoutPlan = 0;
@@ -544,12 +586,29 @@ export function createProfileRouteService(
 
         let planId: string | null = null;
         try {
+          const permissionResolution =
+            packagePermissionCache.get(pkg.package_id) ??
+            await resolvePackagePermissionsForProfileInstall(deps, pkg.package_id);
+          packagePermissionCache.set(pkg.package_id, permissionResolution);
+
+          if (!permissionResolution.ok) {
+            failedWithoutPlan += 1;
+            nonPersistedResults.push({
+              package_id: pkg.package_id,
+              install_order: pkg.install_order,
+              plan_id: null,
+              status: 'failed',
+              error: permissionResolution.error
+            });
+            continue;
+          }
+
           const planResponse = await deps.installLifecycle.createPlan(
             {
               package_id: pkg.package_id,
               ...(pkg.package_slug ? { package_slug: pkg.package_slug } : {}),
               org_id: normalizedInput.org_id,
-              requested_permissions: [],
+              requested_permissions: permissionResolution.requested_permissions,
               org_policy: normalizedInput.org_policy,
               ...(normalizedInput.correlation_id
                 ? { correlation_id: normalizedInput.correlation_id }

@@ -27,6 +27,7 @@
     "run:security-promotion": "node scripts/run-security-promotion.mjs",
     "run:beta-readiness": "node scripts/run-beta-readiness-report.mjs",
     "run:control-plane": "node apps/control-plane/dist/server-main.js",
+    "forge": "node apps/forge-cli/bin/forge.mjs",
     "release:apply-signoffs": "node scripts/apply-release-signoffs.mjs",
     "release:prepare": "node scripts/prepare-release-package.mjs",
     "verify:migrations:dr018": "node scripts/verify-dr018-migration.mjs",

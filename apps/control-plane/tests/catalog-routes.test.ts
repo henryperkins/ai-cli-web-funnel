@@ -11,6 +11,18 @@ describe('catalog routes search actions', () => {
         async getPackage() {
           return null;
         },
+        async getPackageBySlug(slug) {
+          if (slug === 'acme/catalog-addon') {
+            return {
+              package_id: '11111111-1111-4111-8111-111111111111',
+              package_slug: 'acme/catalog-addon',
+              canonical_repo: 'github.com/acme/catalog-addon',
+              updated_at: '2026-03-01T00:00:00Z'
+            };
+          }
+
+          return null;
+        },
         async searchPackages() {
           return [
             {
@@ -91,5 +103,46 @@ describe('catalog routes search actions', () => {
     expect(response.results[1]?.actions.open_in_vscode.uri).toBe(
       'vscode://forge.install?package_id=22222222-2222-4222-8222-222222222222'
     );
+  });
+
+  it('resolves an exact package slug without ranking heuristics', async () => {
+    const service = createCatalogRouteService({
+      catalog: {
+        async listPackages() {
+          return [];
+        },
+        async getPackage() {
+          return null;
+        },
+        async getPackageBySlug(slug) {
+          if (slug === 'acme/catalog-addon') {
+            return {
+              package_id: '11111111-1111-4111-8111-111111111111',
+              package_slug: 'acme/catalog-addon',
+              canonical_repo: 'github.com/acme/catalog-addon',
+              updated_at: '2026-03-01T00:00:00Z'
+            };
+          }
+
+          return null;
+        },
+        async searchPackages() {
+          return [];
+        },
+        async persistIngestResult() {
+          return {
+            merge_run_id: 'merge-run-1',
+            package_id: null,
+            queued_conflicts: 0
+          };
+        }
+      }
+    });
+
+    const resolved = await service.resolvePackageBySlug('acme/catalog-addon');
+    const missing = await service.resolvePackageBySlug('missing/addon');
+
+    expect(resolved?.package_id).toBe('11111111-1111-4111-8111-111111111111');
+    expect(missing).toBeNull();
   });
 });
