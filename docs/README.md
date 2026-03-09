@@ -29,6 +29,7 @@ Primary framing lives in the root `README.md`.
    - `E9-S4` distribution policy is validated in workflow/scripts/docs, but release evidence remains draft until sign-off and CI signature completion.
    - `E10-S1` beta pilot tooling is ready for execution, but pilot traffic has not started yet.
    - `E10-S2/S3` triage and GA decision work remain in progress.
+12. GA readiness validation gate is implemented: `npm run validate:ga-readiness` composes release evidence validation, doc-status consistency, and beta readiness checks into a single fail-closed gate.
 
 ## Status Vocabulary
 
@@ -64,6 +65,7 @@ Primary framing lives in the root `README.md`.
 9. `docs/runbooks/cron-failure-triage-and-replay-recovery.md`
 10. `docs/runbooks/migration-rollout-and-rollback.md`
 11. `docs/runbooks/security-trust-gate-operations.md`
+12. `docs/runbooks/pilot-to-ga-operations.md`
 
 ## Wave Reports
 
@@ -82,9 +84,19 @@ Primary framing lives in the root `README.md`.
 2. `docs/wave7-execution-plan.md`
 3. `docs/wave9-execution-plan.md`
 
+## Build Prompts
+
+1. `docs/plans/2026-03-09-v1-ga-build-prompt.md`
+2. `docs/plans/2026-03-09-curseforge-style-manager-build-prompt.md`
+3. `docs/plans/2026-03-09-v1-ga-closure-implementation-plan.md`
+
 ## Application Completion Backlog
 
 1. `docs/application-completion-backlog.md`
+
+## Assessments
+
+1. `docs/forge-gap-assessment-2026-03-09.md`
 
 ## Distribution and Beta/GA Artifacts
 
@@ -112,3 +124,4 @@ Primary framing lives in the root `README.md`.
 3. `npm run test:e2e-local`
 4. `npm run test:integration-db:docker`
 5. `npm run run:security-trust-gates -- --mode dry-run --action evaluate --window-from <iso> --window-to <iso> --trigger docs-index`
+6. `npm run validate:ga-readiness`

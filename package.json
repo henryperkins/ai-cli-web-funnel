@@ -32,6 +32,7 @@
     "verify:migrations:dr018": "node scripts/verify-dr018-migration.mjs",
     "check:governance": "node scripts/verify-governance-drift.mjs",
     "check:docs-status": "node scripts/verify-doc-status-consistency.mjs",
+    "validate:ga-readiness": "node scripts/validate-ga-readiness.mjs",
     "check": "npm run check:governance && npm run check:docs-status && npm run typecheck && npm run test"
   },
   "dependencies": {
