@@ -37,16 +37,21 @@ Or directly:
 node apps/forge-cli/bin/forge.mjs <command>
 ```
 
-## Define an org policy file
+## Initialize the CLI
 
-`forge plan` and `forge profile install` require an explicit org policy file.
-Create one locally:
+Run first-time setup once:
+
+```bash
+npm run forge -- init
+```
+
+This writes `~/.forge/config.json` with a stable solo `org_id`, `http://localhost:8787` as the control-plane URL, and a safe default solo policy:
 
 ```json
 {
   "mcp_enabled": true,
   "server_allowlist": [],
-  "block_flagged": false,
+  "block_flagged": true,
   "permission_caps": {
     "maxPermissions": 10,
     "disallowedPermissions": []
@@ -54,7 +59,7 @@ Create one locally:
 }
 ```
 
-Save it as `./org-policy.json` or another path of your choice.
+Use `npm run forge -- init --path ./forge-config.json` to write a different config file, or `--force` to replace an existing config.
 
 ## Core workflow
 
@@ -83,7 +88,7 @@ npm run forge -- show <package_id>
 Create an install plan (accepts UUID or exact slug):
 
 ```bash
-npm run forge -- plan <package_id_or_exact_slug> --org-id my-org --org-policy-file ./org-policy.json
+npm run forge -- plan <package_id_or_exact_slug>
 ```
 
 If you do not know the exact slug, search first and then retry with the returned `package_slug` or `package_id`:
@@ -95,7 +100,7 @@ npm run forge -- search "mcp server fetch"
 By default the CLI loads declared permissions from package metadata before creating the plan. If the package does not publish permission metadata, the command fails closed and asks you to provide an explicit override:
 
 ```bash
-npm run forge -- plan <package> --org-id my-org --org-policy-file ./org-policy.json --permissions read:config,write:config
+npm run forge -- plan <package> --permissions read:config,write:config
 ```
 
 ### 3. Install
@@ -163,7 +168,7 @@ npm run forge -- profile import my-profile.json
 Install all packages in a profile:
 
 ```bash
-npm run forge -- profile install <profile_id> --org-id my-org --org-policy-file ./org-policy.json --mode apply_verify
+npm run forge -- profile install <profile_id> --mode apply_verify
 ```
 
 Profile install resolves declared permissions per package before creating plans. Packages without permission metadata fail closed in the install run output instead of being planned with an empty permission set.
@@ -174,13 +179,23 @@ All commands support:
 
 | Flag | Description |
 |------|-------------|
-| `--url <url>` | Control-plane URL (default: `FORGE_URL` env or `http://localhost:8787`) |
-| `--org-id <id>` | Required for `plan` and `profile install` |
-| `--org-policy-file <file>` | Required JSON policy file for `plan` and `profile install` |
+| `--path <file>` | Config path for `init` and config loading (default: `FORGE_CONFIG` env or `~/.forge/config.json`) |
+| `--force` | Overwrite existing config for `init` |
+| `--url <url>` | Control-plane URL override (default: `FORGE_URL` env, config, or `http://localhost:8787`) |
+| `--org-id <id>` | Org ID override for `plan` and `profile install` |
+| `--org-policy-file <file>` | Org policy JSON override for `plan` and `profile install` |
 | `--permissions <p1,p2>` | Optional explicit permissions override for `plan` |
 | `--json` | Output raw JSON instead of formatted tables |
 | `--help` | Show help |
 | `--version` | Show version |
+
+The CLI resolves org context and URL in this order: explicit flags, environment variables, user config, then built-in solo defaults. Supported environment variables are `FORGE_CONFIG`, `FORGE_ORG_ID`, `FORGE_ORG_POLICY_FILE`, and `FORGE_URL`.
+
+For advanced use, keep a separate policy file and pass it explicitly:
+
+```bash
+npm run forge -- plan <package_id_or_exact_slug> --org-id my-org --org-policy-file ./org-policy.json
+```
 
 ## Catalog freshness
 

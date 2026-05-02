@@ -16,6 +16,20 @@ import {
   formatKeyValue,
   formatTable,
 } from './format.js';
+import {
+  DEFAULT_CONTROL_PLANE_URL,
+  DEFAULT_SOLO_ORG_POLICY,
+  defaultOrgId,
+  loadOrgPolicyFile,
+  loadUserConfig,
+  resolveConfigPath,
+  validateControlPlaneUrl,
+  writeUserConfig,
+  type DefaultOrgPolicy,
+  type ForgeUserConfigField,
+  type ForgeUserConfig,
+  type LoadedForgeUserConfig,
+} from './config.js';
 
 // ── Arg parsing helpers ────────────────────────────────────────────
 
@@ -25,16 +39,6 @@ export interface ParsedArgs {
   readonly positional: readonly string[];
   readonly flags: ReadonlyMap<string, string>;
   readonly booleans: ReadonlySet<string>;
-}
-
-interface DefaultOrgPolicy {
-  mcp_enabled: boolean;
-  server_allowlist: string[];
-  block_flagged: boolean;
-  permission_caps: {
-    maxPermissions: number;
-    disallowedPermissions: string[];
-  };
 }
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -72,8 +76,56 @@ function hasFlag(args: ParsedArgs, name: string): boolean {
   return args.booleans.has(name);
 }
 
-function getBaseUrl(args: ParsedArgs): string {
-  return getFlag(args, 'url') ?? process.env['FORGE_URL'] ?? 'http://localhost:8787';
+function loadConfigFromArgs(
+  args: ParsedArgs,
+  fields?: readonly ForgeUserConfigField[]
+): LoadedForgeUserConfig {
+  const configPath = resolveConfigPath({ explicitPath: getFlag(args, 'path') });
+  return fields === undefined ? loadUserConfig(configPath) : loadUserConfig(configPath, { fields });
+}
+
+function reportError(message: string): void {
+  output(message);
+  process.exitCode = 1;
+}
+
+function resolveBaseUrl(args: ParsedArgs): string | null {
+  const explicitUrl = getFlag(args, 'url');
+  const envUrl = process.env['FORGE_URL'];
+
+  if (explicitUrl !== undefined || envUrl !== undefined) {
+    try {
+      return validateControlPlaneUrl(explicitUrl ?? envUrl ?? '', explicitUrl !== undefined ? '--url' : 'FORGE_URL');
+    } catch (err) {
+      reportError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  }
+
+  let loadedConfig: LoadedForgeUserConfig;
+  try {
+    loadedConfig = loadConfigFromArgs(args, ['control_plane_url']);
+  } catch (err) {
+    reportError(err instanceof Error ? err.message : String(err));
+    return null;
+  }
+
+  return loadedConfig.config?.control_plane_url ?? DEFAULT_CONTROL_PLANE_URL;
+}
+
+function makeDefaultUserConfig(args: ParsedArgs): ForgeUserConfig | null {
+  const controlPlaneUrl = getFlag(args, 'url') ?? process.env['FORGE_URL'] ?? DEFAULT_CONTROL_PLANE_URL;
+  const label = getFlag(args, 'url') !== undefined ? '--url' : process.env['FORGE_URL'] !== undefined ? 'FORGE_URL' : '--url';
+  try {
+    return {
+      org_id: defaultOrgId(),
+      control_plane_url: validateControlPlaneUrl(controlPlaneUrl, label),
+      org_policy: DEFAULT_SOLO_ORG_POLICY,
+    };
+  } catch (err) {
+    reportError(err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }
 
 function isJsonMode(args: ParsedArgs): boolean {
@@ -84,8 +136,17 @@ function output(text: string): void {
   process.stdout.write(text + '\n');
 }
 
-function createClientFromArgs(args: ParsedArgs): ForgeClient {
-  return createForgeClient({ baseUrl: getBaseUrl(args) });
+function createClientFromArgs(args: ParsedArgs): ForgeClient | null {
+  const baseUrl = resolveBaseUrl(args);
+  return baseUrl ? createForgeClient({ baseUrl }) : null;
+}
+
+function maybeDefaultPolicyHint(args: ParsedArgs, configPath: string, usingDefaultPolicy: boolean): string | null {
+  if (!usingDefaultPolicy || isJsonMode(args)) {
+    return null;
+  }
+
+  return `Using default solo org policy. Run \`forge init\` to write ${configPath}.`;
 }
 
 function handleResponse<T>(args: ParsedArgs, ok: boolean, status: number, data: T, formatter: (d: T) => string): boolean {
@@ -116,28 +177,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
-function asStringArray(value: unknown): string[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-
-  const normalized: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== 'string') {
-      return null;
-    }
-
-    const trimmed = entry.trim();
-    if (trimmed.length === 0) {
-      return null;
-    }
-
-    normalized.push(trimmed);
-  }
-
-  return normalized;
-}
-
 function parsePermissionsFlag(value: string): string[] | null {
   if (value.trim().length === 0) {
     return [];
@@ -156,79 +195,45 @@ function parsePermissionsFlag(value: string): string[] | null {
   return normalized;
 }
 
-function normalizeOrgPolicy(value: unknown): DefaultOrgPolicy | null {
-  const record = asRecord(value);
-  if (!record) {
-    return null;
-  }
-
-  const permissionCaps = asRecord(record['permission_caps']);
-  if (
-    typeof record['mcp_enabled'] !== 'boolean' ||
-    !Array.isArray(record['server_allowlist']) ||
-    typeof record['block_flagged'] !== 'boolean' ||
-    !permissionCaps ||
-    !Number.isInteger(permissionCaps['maxPermissions']) ||
-    Number(permissionCaps['maxPermissions']) < 0
-  ) {
-    return null;
-  }
-
-  const serverAllowlist = asStringArray(record['server_allowlist']);
-  const disallowedPermissions = asStringArray(permissionCaps['disallowedPermissions']);
-  if (!serverAllowlist || !disallowedPermissions) {
-    return null;
-  }
-
-  return {
-    mcp_enabled: record['mcp_enabled'],
-    server_allowlist: serverAllowlist,
-    block_flagged: record['block_flagged'],
-    permission_caps: {
-      maxPermissions: Number(permissionCaps['maxPermissions']),
-      disallowedPermissions,
-    },
-  };
-}
-
-function loadOrgPolicyFile(filePath: string): DefaultOrgPolicy {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as unknown;
-  } catch (err) {
-    throw new Error(`Failed to read org policy file: ${filePath}`);
-  }
-
-  const orgPolicy = normalizeOrgPolicy(parsed);
-  if (!orgPolicy) {
-    throw new Error(`Invalid org policy file: ${filePath}`);
-  }
-
-  return orgPolicy;
-}
-
 function resolveOrgContext(
   args: ParsedArgs,
   usage: string
-): { orgId: string; orgPolicy: DefaultOrgPolicy } | null {
-  const orgId = getFlag(args, 'org-id')?.trim();
-  if (!orgId) {
-    output(`${usage}\n\nMissing required flag: --org-id`);
-    process.exitCode = 1;
-    return null;
+): { orgId: string; orgPolicy: DefaultOrgPolicy; defaultPolicyHint: string | null } | null {
+  const configPath = resolveConfigPath({ explicitPath: getFlag(args, 'path') });
+  const orgIdFlag = getFlag(args, 'org-id')?.trim();
+  const orgIdEnv = process.env['FORGE_ORG_ID']?.trim();
+  const policyFile = getFlag(args, 'org-policy-file')?.trim() || process.env['FORGE_ORG_POLICY_FILE']?.trim();
+
+  const neededConfigFields: ForgeUserConfigField[] = [];
+  if (!orgIdFlag && !orgIdEnv) {
+    neededConfigFields.push('org_id');
+  }
+  if (!policyFile) {
+    neededConfigFields.push('org_policy');
   }
 
-  const orgPolicyFile = getFlag(args, 'org-policy-file')?.trim();
-  if (!orgPolicyFile) {
-    output(`${usage}\n\nMissing required flag: --org-policy-file <file>`);
-    process.exitCode = 1;
-    return null;
+  let loadedConfig: LoadedForgeUserConfig = { path: configPath, exists: false, config: null };
+  if (neededConfigFields.length > 0) {
+    try {
+      loadedConfig = loadUserConfig(configPath, { fields: neededConfigFields });
+    } catch (err) {
+      output(`${usage}\n\n${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return null;
+    }
   }
+
+  const orgId = orgIdFlag || orgIdEnv || loadedConfig.config?.org_id || defaultOrgId();
 
   try {
+    const orgPolicy = policyFile
+      ? loadOrgPolicyFile(policyFile)
+      : loadedConfig.config?.org_policy ?? DEFAULT_SOLO_ORG_POLICY;
+    const usingDefaultPolicy = !policyFile && loadedConfig.config?.org_policy === undefined;
     return {
       orgId,
-      orgPolicy: loadOrgPolicyFile(orgPolicyFile),
+      orgPolicy,
+      defaultPolicyHint: maybeDefaultPolicyHint(args, loadedConfig.path, usingDefaultPolicy),
     };
   } catch (err) {
     output(err instanceof Error ? err.message : String(err));
@@ -315,6 +320,30 @@ function normalizeProfileImportPayload(value: unknown): ProfileImportInput | nul
 
 // ── Commands ───────────────────────────────────────────────────────
 
+export async function initCommand(args: ParsedArgs): Promise<void> {
+  const config = makeDefaultUserConfig(args);
+  if (!config) {
+    return;
+  }
+
+  const configPath = resolveConfigPath({ explicitPath: getFlag(args, 'path') });
+  try {
+    writeUserConfig(configPath, config, { force: hasFlag(args, 'force') });
+  } catch (err) {
+    reportError(err instanceof Error ? err.message : String(err));
+    return;
+  }
+
+  if (isJsonMode(args)) {
+    output(formatJson({ path: configPath, config }));
+    return;
+  }
+
+  output(`Forge config written to ${configPath}`);
+  output(`org_id: ${config.org_id}`);
+  output(`control_plane_url: ${config.control_plane_url}`);
+}
+
 export async function searchCommand(args: ParsedArgs): Promise<void> {
   const query = args.positional[0];
   if (!query) {
@@ -326,6 +355,9 @@ export async function searchCommand(args: ParsedArgs): Promise<void> {
   const limitStr = getFlag(args, 'limit');
   const limit = limitStr !== undefined ? parseInt(limitStr, 10) : 10;
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.search(query, limit);
 
   handleResponse(args, res.ok, res.status, res.data, (data) => {
@@ -347,6 +379,9 @@ export async function showCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.getPackage(packageId);
 
   handleResponse(args, res.ok, res.status, res.data, (data) =>
@@ -363,6 +398,9 @@ export async function showCommand(args: ParsedArgs): Promise<void> {
 
 export async function listCommand(args: ParsedArgs): Promise<void> {
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.listPackages();
 
   handleResponse(args, res.ok, res.status, res.data, (data) => {
@@ -378,6 +416,9 @@ export async function listCommand(args: ParsedArgs): Promise<void> {
 
 export async function freshnessCommand(args: ParsedArgs): Promise<void> {
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.getFreshness();
 
   handleResponse(args, res.ok, res.status, res.data, (data) => {
@@ -393,7 +434,7 @@ export async function freshnessCommand(args: ParsedArgs): Promise<void> {
 
 export async function planCommand(args: ParsedArgs): Promise<void> {
   const usage =
-    'Usage: forge plan <package_id_or_slug> --org-id <org> --org-policy-file <file> [--permissions <p1,p2>]';
+    'Usage: forge plan <package_id_or_slug> [--org-id <org>] [--org-policy-file <file>] [--permissions <p1,p2>]';
   let packageInput = args.positional[0];
   if (!packageInput) {
     output(usage);
@@ -407,6 +448,9 @@ export async function planCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
 
   // If input is not a UUID, resolve it as an exact package slug.
   let packageId: string;
@@ -456,14 +500,17 @@ export async function planCommand(args: ParsedArgs): Promise<void> {
   const res = await client.createPlan(input);
 
   handleResponse(args, res.ok, res.status, res.data, (data) =>
-    formatKeyValue([
-      ['plan_id', data.plan_id],
-      ['status', data.status],
-      ['package_id', data.package_id],
-      ['package_slug', data.package_slug],
-      ['policy_outcome', data.policy_outcome],
-      ['replayed', String(data.replayed)],
-    ])
+    [
+      ...(orgContext.defaultPolicyHint ? [orgContext.defaultPolicyHint, ''] : []),
+      formatKeyValue([
+        ['plan_id', data.plan_id],
+        ['status', data.status],
+        ['package_id', data.package_id],
+        ['package_slug', data.package_slug],
+        ['policy_outcome', data.policy_outcome],
+        ['replayed', String(data.replayed)],
+      ]),
+    ].join('\n')
   );
 }
 
@@ -476,6 +523,9 @@ export async function installCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.applyPlan(planId);
 
   handleResponse(args, res.ok, res.status, res.data, (data) =>
@@ -498,6 +548,9 @@ export async function verifyCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.verifyPlan(planId);
 
   handleResponse(args, res.ok, res.status, res.data, (data) => {
@@ -535,6 +588,9 @@ export async function updateCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const version = getFlag(args, 'version');
   const res = await client.updatePlan(planId, version);
 
@@ -558,6 +614,9 @@ export async function removeCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.removePlan(planId);
 
   handleResponse(args, res.ok, res.status, res.data, (data) =>
@@ -580,6 +639,9 @@ export async function rollbackCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.rollbackPlan(planId);
 
   handleResponse(args, res.ok, res.status, res.data, (data) =>
@@ -602,6 +664,9 @@ export async function statusCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.getPlan(planId);
 
   handleResponse(args, res.ok, res.status, res.data, (data) => {
@@ -636,6 +701,9 @@ export async function statusCommand(args: ParsedArgs): Promise<void> {
 
 export async function profileListCommand(args: ParsedArgs): Promise<void> {
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
 
   const opts: { limit?: number; offset?: number; author_id?: string; visibility?: string } = {};
   const limitStr = getFlag(args, 'limit');
@@ -676,6 +744,9 @@ export async function profileShowCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.getProfile(profileId);
 
   handleResponse(args, res.ok, res.status, res.data, (data) => formatProfile(data.profile));
@@ -690,6 +761,9 @@ export async function profileExportCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.exportProfile(profileId);
 
   if (!res.ok) {
@@ -741,6 +815,9 @@ export async function profileImportCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.importProfile(payload);
 
   handleResponse(args, res.ok, res.status, res.data, (data) => formatProfile(data.profile));
@@ -748,7 +825,7 @@ export async function profileImportCommand(args: ParsedArgs): Promise<void> {
 
 export async function profileInstallCommand(args: ParsedArgs): Promise<void> {
   const usage =
-    'Usage: forge profile install <id> --org-id <org> --org-policy-file <file> [--mode <plan_only|apply_verify>]';
+    'Usage: forge profile install <id> [--org-id <org>] [--org-policy-file <file>] [--mode <plan_only|apply_verify>]';
   const profileId = args.positional[0];
   if (!profileId) {
     output(usage);
@@ -762,6 +839,9 @@ export async function profileInstallCommand(args: ParsedArgs): Promise<void> {
   }
 
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const mode = (getFlag(args, 'mode') ?? 'plan_only') as 'plan_only' | 'apply_verify';
 
   const res = await client.installProfile(profileId, {
@@ -773,6 +853,10 @@ export async function profileInstallCommand(args: ParsedArgs): Promise<void> {
   handleResponse(args, res.ok, res.status, res.data, (data) => {
     const response = data as ProfileInstallResponse;
     const lines: string[] = [];
+    if (orgContext.defaultPolicyHint) {
+      lines.push(orgContext.defaultPolicyHint);
+      lines.push('');
+    }
     lines.push(
       formatKeyValue([
         ['run_id', response.run.run_id],
@@ -808,6 +892,9 @@ export async function profileInstallCommand(args: ParsedArgs): Promise<void> {
 
 export async function healthCommand(args: ParsedArgs): Promise<void> {
   const client = createClientFromArgs(args);
+  if (!client) {
+    return;
+  }
   const res = await client.health();
 
   handleResponse(args, res.ok, res.status, res.data, (data) =>

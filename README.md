@@ -128,7 +128,8 @@ The repo includes a user-facing `forge` command that wraps the control-plane HTT
 
 ```bash
 npm run forge -- search "mcp server fetch"   # discover
-npm run forge -- plan <package_id_or_exact_slug> --org-id my-org --org-policy-file ./org-policy.json
+npm run forge -- init                         # first-run config
+npm run forge -- plan <package_id_or_exact_slug>
 npm run forge -- install <plan_id>            # install
 npm run forge -- verify <plan_id>             # verify
 npm run forge -- update <plan_id>             # update
@@ -138,14 +139,15 @@ npm run forge -- status <plan_id>             # status
 npm run forge -- profile list                 # profiles
 npm run forge -- profile export <profile_id> --output profile.json
 npm run forge -- profile import profile.json
-npm run forge -- profile install <profile_id> --org-id my-org --org-policy-file ./org-policy.json
+npm run forge -- profile install <profile_id>
 npm run forge -- health                       # health
 ```
 
-Support level: `preview`. Requires a running control-plane. `forge plan` and
-`forge profile install` now require an explicit org policy file; plan creation
-uses catalog-declared permissions by default and fails closed when permission
-metadata is missing. See `docs/quickstart.md`.
+Support level: `preview`. Requires a running control-plane. `forge init` writes
+a local solo developer config; `forge plan` and `forge profile install` also
+accept explicit `--org-id`/`--org-policy-file` overrides for advanced use. Plan
+creation uses catalog-declared permissions by default and fails closed when
+permission metadata is missing. See `docs/quickstart.md`.
 
 ## Commands
 

@@ -1,4 +1,5 @@
 import {
+  initCommand,
   parseArgs,
   searchCommand,
   showCommand,
@@ -24,6 +25,7 @@ const VERSION = '0.1.0';
 const HELP = `Usage: forge <command> [options]
 
 Commands:
+  init                   Write first-run solo developer config
   search <query>         Search the addon catalog
   show <package_id>      Show package details
   list                   List available packages
@@ -43,10 +45,12 @@ Commands:
   health                 Check control-plane health
 
 Options:
-  --url <url>            Control-plane URL (default: FORGE_URL or http://localhost:8787)
-  --org-id <id>          Required for plan/profile install
+  --path <file>          Config path for init/config loading (default: FORGE_CONFIG or ~/.forge/config.json)
+  --force                Overwrite existing config for init
+  --url <url>            Control-plane URL override (default: FORGE_URL, config, or http://localhost:8787)
+  --org-id <id>          Org ID override for plan/profile install
   --org-policy-file <file>
-                         Required JSON policy file for plan/profile install
+                          Org policy JSON override for plan/profile install
   --permissions <p1,p2>  Override declared package permissions for plan
   --json                 Output raw JSON
   --help                 Show this help
@@ -87,6 +91,9 @@ async function main(): Promise<void> {
 
   try {
     switch (command) {
+      case 'init':
+        await initCommand(commandArgs);
+        break;
       case 'search':
         await searchCommand(commandArgs);
         break;

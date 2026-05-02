@@ -30,7 +30,7 @@ Primary framing lives in the root `README.md`.
    - `E10-S1` beta pilot tooling is ready for execution, but pilot traffic has not started yet.
    - `E10-S2/S3` triage and GA decision work remain in progress.
 12. GA readiness validation gate is implemented: `npm run validate:ga-readiness` composes release evidence validation, doc-status consistency, and beta readiness checks into a single fail-closed gate.
-13. User-facing Forge CLI is implemented (`apps/forge-cli`): `forge search`, `forge plan` (UUID or exact slug), `forge install`, `forge verify`, `forge update`, `forge remove`, `forge rollback`, `forge status`, `forge profile *`, `forge freshness`, `forge health`. Support level: `preview` (wraps control-plane HTTP API; requires running server; `plan` and `profile install` require an explicit org policy file and fail closed when permission metadata is missing).
+13. User-facing Forge CLI is implemented (`apps/forge-cli`): `forge init`, `forge search`, `forge plan` (UUID or exact slug), `forge install`, `forge verify`, `forge update`, `forge remove`, `forge rollback`, `forge status`, `forge profile *`, `forge freshness`, `forge health`. Support level: `preview` (wraps control-plane HTTP API; requires running server; `init` writes local solo developer config; `plan` and `profile install` support explicit org policy overrides and fail closed when permission metadata is missing).
 
 ## Status Vocabulary
 

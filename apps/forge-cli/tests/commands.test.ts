@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   healthCommand,
+  initCommand,
   installCommand,
   parseArgs,
   planCommand,
@@ -16,11 +17,17 @@ import {
   statusCommand,
   type ParsedArgs,
 } from '../src/commands.js';
+import {
+  DEFAULT_SOLO_ORG_POLICY,
+  defaultOrgId,
+  resolveConfigPath,
+  validateControlPlaneUrl,
+} from '../src/config.js';
 
 const DEFAULT_ORG_POLICY = {
   mcp_enabled: true,
   server_allowlist: [],
-  block_flagged: false,
+  block_flagged: true,
   permission_caps: {
     maxPermissions: 10,
     disallowedPermissions: [],
@@ -67,11 +74,38 @@ const BASE_EXPORT = {
   exported_at: '2024-01-02T00:00:00Z',
 } as const;
 
+const CONFIG_POLICY = {
+  mcp_enabled: true,
+  server_allowlist: ['pkg-from-config'],
+  block_flagged: false,
+  permission_caps: {
+    maxPermissions: 3,
+    disallowedPermissions: ['write:secrets'],
+  },
+} as const;
+
+const ENV_POLICY = {
+  mcp_enabled: false,
+  server_allowlist: ['pkg-from-env'],
+  block_flagged: true,
+  permission_caps: {
+    maxPermissions: 1,
+    disallowedPermissions: ['read:env'],
+  },
+} as const;
+
 let stdoutOutput: string;
 const tempDirs: string[] = [];
 
 beforeEach(() => {
   stdoutOutput = '';
+  const isolatedConfigDir = mkdtempSync(join(tmpdir(), 'forge-cli-config-'));
+  tempDirs.push(isolatedConfigDir);
+  vi.stubEnv('FORGE_CONFIG', join(isolatedConfigDir, 'config.json'));
+  vi.stubEnv('XDG_CONFIG_HOME', undefined);
+  vi.stubEnv('FORGE_URL', undefined);
+  vi.stubEnv('FORGE_ORG_ID', undefined);
+  vi.stubEnv('FORGE_ORG_POLICY_FILE', undefined);
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
     stdoutOutput += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
     return true;
@@ -82,6 +116,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   process.exitCode = undefined;
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -111,8 +146,41 @@ function createTempFile(name: string, contents: string): string {
   return filePath;
 }
 
+function createTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'forge-cli-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function createTempPath(name: string): string {
+  return join(createTempDir(), name);
+}
+
 function createOrgPolicyFile(): string {
   return createTempFile('org-policy.json', JSON.stringify(DEFAULT_ORG_POLICY, null, 2));
+}
+
+function createPolicyFile(policy: unknown): string {
+  return createTempFile('org-policy.json', JSON.stringify(policy, null, 2));
+}
+
+function createConfigFile(config: unknown): string {
+  return createTempFile('config.json', JSON.stringify(config, null, 2));
+}
+
+function makePlanFetchMock(): ReturnType<typeof vi.fn> {
+  return vi.fn().mockResolvedValue({
+    ok: true,
+    status: 201,
+    json: async () => ({
+      status: 'planned',
+      plan_id: 'plan-abc',
+      package_id: '11111111-1111-4111-8111-111111111111',
+      package_slug: 'my-addon',
+      policy_outcome: 'allow',
+      replayed: false,
+    }),
+  });
 }
 
 function mockFetchForResponse(response: { status: number; ok: boolean; body: unknown }): typeof fetch {
@@ -143,6 +211,87 @@ describe('parseArgs', () => {
     const result = parseArgs(['--json', '--help']);
     expect(result.booleans.has('json')).toBe(true);
     expect(result.booleans.has('help')).toBe(true);
+  });
+});
+
+describe('config helpers', () => {
+  it('resolves config path from FORGE_CONFIG first', () => {
+    expect(
+      resolveConfigPath({
+        env: {
+          FORGE_CONFIG: '/tmp/custom-forge.json',
+          XDG_CONFIG_HOME: '/tmp/xdg',
+        },
+        homeDir: '/home/tester',
+      })
+    ).toBe('/tmp/custom-forge.json');
+  });
+
+  it('resolves config path from XDG_CONFIG_HOME', () => {
+    expect(
+      resolveConfigPath({
+        env: { XDG_CONFIG_HOME: '/tmp/xdg' },
+        homeDir: '/home/tester',
+      })
+    ).toBe('/tmp/xdg/forge/config.json');
+  });
+
+  it('falls back to the home directory config path', () => {
+    expect(resolveConfigPath({ env: {}, homeDir: '/home/tester' })).toBe('/home/tester/.forge/config.json');
+  });
+
+  it('validates config URLs', () => {
+    expect(validateControlPlaneUrl('https://forge.example.test')).toBe('https://forge.example.test');
+    expect(() => validateControlPlaneUrl('file:///tmp/forge.sock')).toThrow('http(s) URL');
+    expect(() => validateControlPlaneUrl('localhost:8787')).toThrow('http(s) URL');
+  });
+});
+
+describe('initCommand', () => {
+  it('writes the default solo config to a custom path', async () => {
+    const configPath = createTempPath('config.json');
+
+    await initCommand(makeArgs([], { path: configPath, url: 'https://forge.example.test' }));
+
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    expect(config).toEqual({
+      org_id: defaultOrgId(),
+      control_plane_url: 'https://forge.example.test',
+      org_policy: DEFAULT_SOLO_ORG_POLICY,
+    });
+    expect((statSync(configPath).mode & 0o777).toString(8)).toBe('600');
+    expect(stdoutOutput).toContain(`Forge config written to ${configPath}`);
+  });
+
+  it('refuses to overwrite an existing config without force', async () => {
+    const configPath = createTempFile('config.json', '{"org_id":"existing"}\n');
+
+    await initCommand(makeArgs([], { path: configPath }));
+
+    expect(readFileSync(configPath, 'utf8')).toBe('{"org_id":"existing"}\n');
+    expect(stdoutOutput).toContain('already exists');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('overwrites an existing config with force', async () => {
+    const configPath = createTempFile('config.json', '{"org_id":"existing"}\n');
+
+    await initCommand(makeArgs([], { path: configPath }, ['force']));
+
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    expect(config['org_id']).toBe(defaultOrgId());
+    expect(config['org_policy']).toEqual(DEFAULT_SOLO_ORG_POLICY);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('rejects invalid init URLs', async () => {
+    const configPath = createTempPath('config.json');
+
+    await initCommand(makeArgs([], { path: configPath, url: 'not-a-url' }));
+
+    expect(existsSync(configPath)).toBe(false);
+    expect(stdoutOutput).toContain('--url must be an absolute http(s) URL');
+    expect(process.exitCode).toBe(1);
   });
 });
 
@@ -179,6 +328,46 @@ describe('searchCommand', () => {
 
     expect(stdoutOutput).toContain('Error (HTTP 500)');
     expect(process.exitCode).toBe(1);
+  });
+
+  it('uses explicit URL without parsing a malformed config file', async () => {
+    const configPath = createTempFile('config.json', '{not json');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        query: 'test',
+        semantic_fallback: false,
+        results: [],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await searchCommand(makeArgs(['test'], { path: configPath, url: 'https://forge.example.test' }));
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://forge.example.test/v1/packages/search');
+    expect(stdoutOutput).toContain('PACKAGE_ID');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('uses FORGE_URL without parsing a malformed config file', async () => {
+    const configPath = createTempFile('config.json', '{not json');
+    vi.stubEnv('FORGE_URL', 'https://forge-env.example.test');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        query: 'test',
+        semantic_fallback: false,
+        results: [],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await searchCommand(makeArgs(['test'], { path: configPath }));
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://forge-env.example.test/v1/packages/search');
+    expect(process.exitCode).toBeUndefined();
   });
 });
 
@@ -311,17 +500,272 @@ describe('planCommand', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('fails when org policy input is missing', async () => {
+  it('uses built-in solo org defaults without explicit org flags', async () => {
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(makeArgs(['11111111-1111-4111-8111-111111111111'], { permissions: 'read:config' }));
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: defaultOrgId(),
+      requested_permissions: ['read:config'],
+      org_policy: DEFAULT_SOLO_ORG_POLICY,
+    });
+    expect(stdoutOutput).toContain('Using default solo org policy');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('omits the default-policy hint in JSON output', async () => {
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(makeArgs(['11111111-1111-4111-8111-111111111111'], { permissions: 'read:config' }, ['json']));
+
+    expect(stdoutOutput).not.toContain('Using default solo org policy');
+    expect(JSON.parse(stdoutOutput)).toMatchObject({ plan_id: 'plan-abc' });
+  });
+
+  it('uses config org context and control-plane URL', async () => {
+    const configPath = createConfigFile({
+      org_id: 'config-org',
+      control_plane_url: 'https://forge.example.test',
+      org_policy: CONFIG_POLICY,
+    });
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        permissions: 'read:config',
+      })
+    );
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://forge.example.test/v1/install/plans');
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'config-org',
+      org_policy: CONFIG_POLICY,
+    });
+    expect(stdoutOutput).not.toContain('Using default solo org policy');
+  });
+
+  it('allows partial org-id overrides while keeping config policy', async () => {
+    const configPath = createConfigFile({
+      org_id: 'config-org',
+      org_policy: CONFIG_POLICY,
+    });
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        'org-id': 'flag-org',
+        permissions: 'read:config',
+      })
+    );
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'flag-org',
+      org_policy: CONFIG_POLICY,
+    });
+  });
+
+  it('allows partial policy-file overrides while keeping config org-id', async () => {
+    const configPath = createConfigFile({
+      org_id: 'config-org',
+      org_policy: CONFIG_POLICY,
+    });
+    const policyFile = createPolicyFile(ENV_POLICY);
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        'org-policy-file': policyFile,
+        permissions: 'read:config',
+      })
+    );
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'config-org',
+      org_policy: ENV_POLICY,
+    });
+  });
+
+  it('uses env org context before config and explicit flags before env', async () => {
+    const configPath = createConfigFile({
+      org_id: 'config-org',
+      org_policy: CONFIG_POLICY,
+    });
+    const envPolicyFile = createPolicyFile(ENV_POLICY);
+    const flagPolicyFile = createPolicyFile(DEFAULT_ORG_POLICY);
+    vi.stubEnv('FORGE_ORG_ID', 'env-org');
+    vi.stubEnv('FORGE_ORG_POLICY_FILE', envPolicyFile);
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        'org-id': 'flag-org',
+        'org-policy-file': flagPolicyFile,
+        permissions: 'read:config',
+      })
+    );
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'flag-org',
+      org_policy: DEFAULT_ORG_POLICY,
+    });
+  });
+
+  it('uses env org context before config when flags are absent', async () => {
+    const configPath = createConfigFile({
+      org_id: 'config-org',
+      org_policy: CONFIG_POLICY,
+    });
+    const envPolicyFile = createPolicyFile(ENV_POLICY);
+    vi.stubEnv('FORGE_ORG_ID', 'env-org');
+    vi.stubEnv('FORGE_ORG_POLICY_FILE', envPolicyFile);
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        permissions: 'read:config',
+      })
+    );
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'env-org',
+      org_policy: ENV_POLICY,
+    });
+  });
+
+  it('uses explicit org/url overrides without parsing a malformed config file', async () => {
+    const configPath = createTempFile('config.json', '{not json');
+    const policyFile = createPolicyFile(ENV_POLICY);
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        url: 'https://forge.example.test',
+        'org-id': 'flag-org',
+        'org-policy-file': policyFile,
+        permissions: 'read:config',
+      })
+    );
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://forge.example.test/v1/install/plans');
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'flag-org',
+      org_policy: ENV_POLICY,
+    });
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('uses env org/url overrides without parsing a malformed config file', async () => {
+    const configPath = createTempFile('config.json', '{not json');
+    const policyFile = createPolicyFile(ENV_POLICY);
+    vi.stubEnv('FORGE_URL', 'https://forge-env.example.test');
+    vi.stubEnv('FORGE_ORG_ID', 'env-org');
+    vi.stubEnv('FORGE_ORG_POLICY_FILE', policyFile);
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        permissions: 'read:config',
+      })
+    );
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://forge-env.example.test/v1/install/plans');
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'env-org',
+      org_policy: ENV_POLICY,
+    });
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('shows the default-policy hint for partial configs without org policy', async () => {
+    const configPath = createConfigFile({
+      org_id: 'config-org',
+      control_plane_url: 'https://forge.example.test',
+    });
+    const fetchMock = makePlanFetchMock();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        permissions: 'read:config',
+      })
+    );
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
+      org_id: 'config-org',
+      org_policy: DEFAULT_SOLO_ORG_POLICY,
+    });
+    expect(stdoutOutput).toContain('Using default solo org policy');
+    expect(stdoutOutput).toContain(configPath);
+  });
+
+  it('prints optional org flags in usage', async () => {
+    await planCommand(makeArgs([]));
+
+    expect(stdoutOutput).toContain(
+      'Usage: forge plan <package_id_or_slug> [--org-id <org>] [--org-policy-file <file>] [--permissions <p1,p2>]'
+    );
+    expect(stdoutOutput).not.toContain('forge plan <package_id_or_slug> --org-id');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('fails loudly for malformed config before API calls', async () => {
+    const configPath = createTempFile('config.json', '{not json');
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
     await planCommand(
-      makeArgs(['my-addon'], {
-        'org-id': 'org-1',
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        permissions: 'read:config',
       })
     );
 
-    expect(stdoutOutput).toContain('Missing required flag: --org-policy-file');
+    expect(stdoutOutput).toContain(`Invalid Forge config at ${configPath}`);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('rejects invalid config control-plane URLs before API calls', async () => {
+    const configPath = createConfigFile({ control_plane_url: 'ftp://forge.example.test' });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await planCommand(
+      makeArgs(['11111111-1111-4111-8111-111111111111'], {
+        path: configPath,
+        permissions: 'read:config',
+      })
+    );
+
+    expect(stdoutOutput).toContain(`Invalid Forge config at ${configPath}`);
+    expect(stdoutOutput).toContain('control_plane_url must be an absolute http(s) URL');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
@@ -565,5 +1009,50 @@ describe('profile subcommands', () => {
     expect(stdoutOutput).toContain('Plan Results:');
     expect(stdoutOutput).toContain('plan-1');
     expect(stdoutOutput).toContain('package_not_found');
+  });
+
+  it('profileInstallCommand can use default solo org context', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        run: {
+          run_id: 'run-default',
+          profile_id: BASE_PROFILE.profile_id,
+          status: 'planned',
+          total_packages: 1,
+          succeeded_count: 1,
+          failed_count: 0,
+          skipped_count: 0,
+          correlation_id: null,
+          started_at: '2026-03-09T00:00:00Z',
+          completed_at: null,
+          plans: [],
+        },
+        plan_results: [],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await profileInstallCommand(makeArgs([BASE_PROFILE.profile_id]));
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      org_id: defaultOrgId(),
+      org_policy: DEFAULT_SOLO_ORG_POLICY,
+      mode: 'plan_only',
+    });
+    expect(stdoutOutput).toContain('Using default solo org policy');
+    expect(stdoutOutput).toContain('run-default');
+  });
+
+  it('profileInstallCommand prints optional org flags in usage', async () => {
+    await profileInstallCommand(makeArgs([]));
+
+    expect(stdoutOutput).toContain(
+      'Usage: forge profile install <id> [--org-id <org>] [--org-policy-file <file>] [--mode <plan_only|apply_verify>]'
+    );
+    expect(stdoutOutput).not.toContain('forge profile install <id> --org-id');
+    expect(process.exitCode).toBe(1);
   });
 });
